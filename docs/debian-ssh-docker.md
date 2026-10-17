@@ -95,7 +95,7 @@ DOTS_LOCAL_AUTH_TOKEN=<output-of-openssl-rand-hex-32>
 
 Restrict the environment file to the service owner (`chmod 600`). The access key is a login credential, separate from both the model API key and the desktop token secret. Enter it in the web login form; it is exchanged for the same HttpOnly session cookie used by Google login. The fixed local administrator retains the same workspace across restarts and access-key changes. Existing sessions last up to 30 days; rotating the login key does not revoke existing sessions. Sign out to revoke a session.
 
-Local mode rejects missing/short keys and public origin/host settings at startup. For a control plane on another machine, enable LAN access below or use `ssh -N -L 4317:127.0.0.1:4317 user@host` and open `http://127.0.0.1:4317` on your computer. The default `DOTS_AUTH_MODE=google` retains Google OAuth and multi-user invitation login. Do not enable `DOTS_E2E_AUTH` in a deployed service.
+Local mode rejects missing/short keys and public settings without HTTPS and an explicit trusted proxy at startup. For a control plane on another machine, enable LAN or HTTPS domain access below, or use `ssh -N -L 4317:127.0.0.1:4317 user@host` and open `http://127.0.0.1:4317` on your computer. The default `DOTS_AUTH_MODE=google` retains Google OAuth and multi-user invitation login. Do not enable `DOTS_E2E_AUTH` in a deployed service.
 
 In the web app, open **设置 → 共享模型 API**, enter the provider's HTTPS API base URL, model name and key, and save. Use a **Pi** task for actions and files inside the Docker desktop. The endpoint must be reachable from the desktop container: `127.0.0.1` there is the container itself. A configured endpoint that is only listening on the control-plane host's loopback needs an explicit tunnel or proxy accessible to the desktop.
 
@@ -113,7 +113,31 @@ DOTS_LAN_CIDR=192.168.1.0/24
 
 Replace the example IP with the control-plane host's actual private address and the CIDR with the permitted client subnet. Open that exact LAN URL and use the existing login key. Loopback access remains available. The request boundary checks the socket's source address, the exact LAN Host/port and browser Origin for HTTP and WebSocket requests. Forwarded IP headers cannot grant access. Only a subnet wholly inside RFC1918 private space is accepted; the origin must be a private IPv4 HTTP URL using `DOTS_PORT`. An all-interface listener without explicit LAN configuration is rejected at startup. To bind only the LAN interface, use its exact IP for `DOTS_BIND_HOST` instead.
 
-Only the control-plane port needs to be reachable through a host firewall. Worker, Agent, noVNC and the dedicated SSH transport continue to use their loopback-only ports. Model settings, task files, desktop viewing and takeover use the authenticated control-plane URL. HTTP LAN access is intended for a trusted network; microphone/WebRTC features that require a secure browser context need HTTPS or localhost. Public HTTPS deployments retain the separate Google/trusted-proxy configuration. If DHCP changes the server address, update the LAN origin and restart, or reserve a stable address on the router.
+Only the control-plane port needs to be reachable through a host firewall. Worker, Agent, noVNC and the dedicated SSH transport continue to use their loopback-only ports. Model settings, task files, desktop viewing and takeover use the authenticated control-plane URL. HTTP LAN access is intended for a trusted network; microphone/WebRTC features that require a secure browser context need HTTPS or localhost. If DHCP changes the server address, update the LAN origin and restart, or reserve a stable address on the router.
+
+### HTTPS domain access
+
+The LAN IP configuration does not allow a domain automatically. Configure the exact HTTPS origin alongside the existing administrator key. Keep TLS termination and HTTP-to-HTTPS redirection at your reverse proxy, forward the original Host, and enable WebSocket upgrades and unbuffered SSE responses.
+
+```dotenv
+DOTS_AUTH_MODE=local
+DOTS_LOCAL_AUTH_TOKEN=<existing administrator access key>
+DOTS_PUBLIC_ORIGIN=https://dots.example.com
+DOTS_TRUSTED_PROXY_TOKEN=<a separate random secret generated with openssl rand -hex 32>
+```
+
+The default `DOTS_TRUSTED_PROXY_MODE=token` requires the proxy to connect from loopback and overwrite `X-Dots-Proxy-Token` with that separate secret. `DOTS_PUBLIC_HOST` is optional; if set for key login, it must match the origin's hostname.
+
+For an existing trusted TCP tunnel such as FRP that connects to `127.0.0.1:4317` and cannot inject an HTTP token header, explicitly choose this alternative instead of the proxy token:
+
+```dotenv
+DOTS_PUBLIC_ORIGIN=https://dots.example.com
+DOTS_TRUSTED_PROXY_MODE=loopback
+```
+
+This mode trusts the local tunnel: only actual loopback peers, the exact public Host/port and `X-Forwarded-Proto: https` are accepted. The HTTPS proxy must overwrite that header, and its plaintext upstream/tunnel port should be restricted to the proxy. Forwarded client-IP headers cannot grant trust. Browser mutations and WebSocket connections must also use the configured HTTPS Origin. Other LAN clients cannot bypass the boundary by spoofing the public Host or proxy headers.
+
+Restart the controller, open the HTTPS URL, and sign in with the same access key. Public sessions use Secure, HttpOnly, SameSite=Lax cookies; local and LAN HTTP login continue to work with separate host cookies and the same persistent workspace. Keep the LAN settings if both entry points are needed. The existing Google/token-proxy setup remains supported and is the default for multi-user deployments.
 
 ## Model credential storage without Kubernetes
 

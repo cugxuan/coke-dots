@@ -15,6 +15,8 @@ function request({
   host = '127.0.0.1:4317',
   origin,
   proxyToken,
+  forwardedProto,
+  forwardedFor,
   method = 'GET',
   url = '/',
 }: {
@@ -22,12 +24,16 @@ function request({
   host?: string;
   origin?: string;
   proxyToken?: string;
+  forwardedProto?: string;
+  forwardedFor?: string;
   method?: string;
   url?: string;
 } = {}) {
   const headers: Record<string, string> = { host };
   if (origin !== undefined) headers.origin = origin;
   if (proxyToken !== undefined) headers['x-dots-proxy-token'] = proxyToken;
+  if (forwardedProto !== undefined) headers['x-forwarded-proto'] = forwardedProto;
+  if (forwardedFor !== undefined) headers['x-forwarded-for'] = forwardedFor;
   return {
     socket: { remoteAddress },
     headers,
@@ -84,6 +90,38 @@ test('keeps OAuth callback exceptions behind the trusted public proxy boundary',
     method: 'GET',
     url: '/auth/google/callback',
   }), '/auth/google/callback', config), false);
+});
+
+test('loopback tunnel access is explicit, HTTPS-only and bound to the exact public origin', () => {
+  const environment = { DOTS_PUBLIC_ORIGIN: 'https://dots.example.test', DOTS_TRUSTED_PROXY_MODE: 'loopback' };
+  const { boundary } = controlPlaneNetwork(environment);
+  const client = { host: 'dots.example.test', origin: environment.DOTS_PUBLIC_ORIGIN, forwardedProto: 'https' };
+  for (const path of ['/', '/api/auth/local/login', '/api/computer/novnc/websockify']) {
+    assert.equal(isLocalRequest(request(client), path, boundary), true);
+  }
+  assert.equal(isLocalRequest(request({ ...client, remoteAddress: '::ffff:127.0.0.1' }), '/', boundary), true);
+  assert.equal(isLocalRequest(request({ ...client, origin: undefined }), '/', boundary), true);
+  assert.equal(isLocalRequest(request({ ...client, origin: 'null' }), '/api/artifact-preview/task/ticket/file', boundary), true);
+  assert.equal(isLocalRequest(request(), '/', boundary), true, 'Direct loopback still works');
+  assert.equal(isAllowedOrigin(environment.DOTS_PUBLIC_ORIGIN, boundary), true);
+  assert.equal(isLocalRequest(request(client), '/', { ...boundary, trustedProxyMode: undefined }), false, 'Default token mode must not trust a tunnel implicitly');
+  for (const remoteAddress of ['192.168.31.42', '172.24.0.2', '203.0.113.1', '::ffff:192.168.31.42']) {
+    assert.equal(isLocalRequest(request({ ...client, remoteAddress, forwardedFor: '127.0.0.1' }), '/', boundary), false);
+  }
+  for (const forwardedProto of [undefined, 'http', 'https,http', 'https, https']) {
+    assert.equal(isLocalRequest(request({ ...client, forwardedProto }), '/', boundary), false);
+  }
+  for (const host of ['evil.example', 'dots.example.test:4317', 'dots.example.test.attacker.example']) {
+    assert.equal(isLocalRequest(request({ ...client, host }), '/', boundary), false);
+  }
+  for (const origin of ['http://dots.example.test', 'https://evil.example', 'http://127.0.0.1:4317', 'null']) {
+    assert.equal(isLocalRequest(request({ ...client, origin }), '/', boundary), false);
+  }
+  for (const publicOrigin of ['', 'http://dots.example.test', 'https://dots.example.test/path', 'https://user:pass@dots.example.test', 'https://dots.example.test?query=1']) {
+    assert.throws(() => controlPlaneNetwork({ ...environment, DOTS_PUBLIC_ORIGIN: publicOrigin }), /HTTPS/);
+  }
+  assert.throws(() => controlPlaneNetwork({ ...environment, DOTS_PUBLIC_HOST: 'other.example.test' }), /matching/);
+  assert.throws(() => controlPlaneNetwork({ ...environment, DOTS_TRUSTED_PROXY_MODE: 'typo' }), /DOTS_TRUSTED_PROXY_MODE/);
 });
 
 const lanConfig: RequestBoundaryConfig = { port: 4317, lanOrigin: 'http://192.168.31.195:4317', lanCidr: '192.168.31.0/24' };

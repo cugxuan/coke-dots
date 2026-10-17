@@ -7,6 +7,7 @@ export interface RequestBoundaryConfig {
   publicOrigin?: string;
   publicHost?: string;
   trustedProxyToken?: string;
+  trustedProxyMode?: 'token' | 'loopback';
   lanOrigin?: string;
   lanCidr?: string;
 }
@@ -26,11 +27,21 @@ export function controlPlaneNetwork(environment: NodeJS.ProcessEnv = process.env
   if (host !== '127.0.0.1' && (!origin || !['0.0.0.0', origin.hostname].includes(host))) {
     throw new Error('DOTS_BIND_HOST requires explicit LAN origin/subnet configuration for non-loopback listening');
   }
+  const trustedProxyMode = environment.DOTS_TRUSTED_PROXY_MODE?.trim() || 'token';
+  if (trustedProxyMode !== 'token' && trustedProxyMode !== 'loopback') throw new Error('DOTS_TRUSTED_PROXY_MODE must be token or loopback');
+  if (trustedProxyMode === 'loopback') {
+    const publicOrigin = httpsPublicOrigin(environment.DOTS_PUBLIC_ORIGIN);
+    const publicHost = environment.DOTS_PUBLIC_HOST?.trim().toLowerCase();
+    if (!publicOrigin || (publicHost && publicHost !== publicOrigin.hostname)) {
+      throw new Error('Loopback proxy mode requires an HTTPS DOTS_PUBLIC_ORIGIN and a matching DOTS_PUBLIC_HOST');
+    }
+  }
   const boundary: RequestBoundaryConfig = {
     port, lanOrigin: origin?.origin, lanCidr: lanCidr || undefined,
     publicOrigin: environment.DOTS_PUBLIC_ORIGIN,
     publicHost: environment.DOTS_PUBLIC_HOST,
     trustedProxyToken: environment.DOTS_TRUSTED_PROXY_TOKEN,
+    trustedProxyMode,
   };
   return { host, port, boundary };
 }
@@ -58,7 +69,13 @@ export function isLocalRequest(req: IncomingMessage, path: string, config: Reque
     && (loopback || inLanSubnet(remote, config.lanCidr));
   const lanOriginAllowed = !origin || origin === lan?.origin || oauthCallback || slackCallback
     || (sandboxArtifactPreview && origin === 'null');
-  return Boolean((loopback && (localHost || forwardedPublicHost) && allowedOrigin) || (lanRequest && lanOriginAllowed));
+  const publicOrigin = httpsPublicOrigin(config.publicOrigin);
+  const loopbackProxy = config.trustedProxyMode === 'loopback' && loopback && publicOrigin
+    && req.headers.host?.toLowerCase() === publicOrigin.host && req.headers['x-forwarded-proto'] === 'https';
+  const publicOriginAllowed = !origin || origin === publicOrigin?.origin || oauthCallback || slackCallback
+    || (sandboxArtifactPreview && origin === 'null');
+  return Boolean((loopback && (localHost || (config.trustedProxyMode !== 'loopback' && forwardedPublicHost)) && allowedOrigin)
+    || (loopbackProxy && publicOriginAllowed) || (lanRequest && lanOriginAllowed));
 }
 
 export function isAllowedOrigin(value: string, config: RequestBoundaryConfig) {
@@ -83,6 +100,13 @@ function configuredLanOrigin(value: string | undefined): URL | null {
   if (!canonical) return null;
   const origin = new URL(canonical);
   return origin.protocol === 'http:' && privateIPv4(origin.hostname) ? origin : null;
+}
+
+export function httpsPublicOrigin(value: string | undefined): URL | null {
+  const canonical = canonicalPublicOrigin(value);
+  if (!canonical) return null;
+  const origin = new URL(canonical);
+  return origin.protocol === 'https:' ? origin : null;
 }
 
 function ipv4Number(value: string) {

@@ -149,7 +149,7 @@ const server = createServer(async (req, res) => {
     try { body = await readJson(req, 1024); }
     catch { return reply(res, 400, { error: '登录请求无效' }); }
     if (!body || typeof body !== 'object' || Array.isArray(body)) return reply(res, 400, { error: '登录请求无效' });
-    return auth.localLogin(typeof body.token === 'string' ? body.token : '', res);
+    return auth.localLogin(typeof body.token === 'string' ? body.token : '', req, res);
   }
   if (path === '/api/auth/google/start' && req.method === 'GET') return auth.begin(req, res);
   if (path === '/api/auth/e2e/login' && req.method === 'POST' && auth.e2eAuthAvailable()) {

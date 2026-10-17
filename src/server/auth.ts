@@ -2,6 +2,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { CodeChallengeMethod, OAuth2Client } from 'google-auth-library';
 import { Store, type AuthSession } from './store.ts';
+import { controlPlaneNetwork, httpsPublicOrigin } from './request-boundary.ts';
 
 const cookieName = 'coke_dots_session';
 const oauthCookieName = 'coke_dots_oauth_state';
@@ -12,6 +13,7 @@ export class AuthService {
   private clientSecret: string;
   private localToken: string;
   private mode: string;
+  private localPublicHost = '';
 
   constructor(private store: Store, private port: number, environment: NodeJS.ProcessEnv = process.env) {
     this.clientId = environment.GOOGLE_CLIENT_ID?.trim() || '';
@@ -21,7 +23,18 @@ export class AuthService {
     if (!['google', 'local'].includes(this.mode)) throw new Error('DOTS_AUTH_MODE must be google or local');
     if (this.mode === 'local') {
       if (!/^[\x21-\x7e]{32,256}$/.test(this.localToken)) throw new Error('Local login requires a random DOTS_LOCAL_AUTH_TOKEN of 32–256 characters');
-      if (environment.DOTS_PUBLIC_ORIGIN || environment.DOTS_PUBLIC_HOST) throw new Error('Local login supports loopback and explicitly configured LAN access. Use Google login for a public deployment.');
+      if (environment.DOTS_PUBLIC_ORIGIN || environment.DOTS_PUBLIC_HOST) {
+        const origin = httpsPublicOrigin(environment.DOTS_PUBLIC_ORIGIN);
+        const publicHost = environment.DOTS_PUBLIC_HOST?.trim().toLowerCase();
+        if (!origin || (publicHost && publicHost !== origin.hostname)) {
+          throw new Error('Public local login requires an HTTPS DOTS_PUBLIC_ORIGIN and a matching DOTS_PUBLIC_HOST');
+        }
+        const { boundary } = controlPlaneNetwork(environment);
+        if (boundary.trustedProxyMode !== 'loopback' && !/^[\x21-\x7e]{32,256}$/.test(boundary.trustedProxyToken || '')) {
+          throw new Error('Public local login requires a strong DOTS_TRUSTED_PROXY_TOKEN or explicit loopback proxy mode');
+        }
+        this.localPublicHost = origin.host;
+      }
     }
   }
 
@@ -29,7 +42,7 @@ export class AuthService {
   localAuthAvailable() { return this.mode === 'local'; }
   e2eAuthAvailable() { return process.env.NODE_ENV === 'test' && process.env.DOTS_E2E_AUTH === '1'; }
 
-  localLogin(token: string, res: ServerResponse) {
+  localLogin(token: string, req: IncomingMessage, res: ServerResponse) {
     if (!this.localAuthAvailable()) return json(res, 404, { error: 'Not found' });
     if (token.length > 256 || !timingSafeEqual(createHash('sha256').update(token).digest(), createHash('sha256').update(this.localToken).digest())) {
       return json(res, 401, { error: '访问密钥不正确' });
@@ -38,7 +51,7 @@ export class AuthService {
     const sessionToken = randomToken();
     const tokenHash = hash(sessionToken);
     this.store.createSession(tokenHash, account.user.id, account.tenant.id, new Date(Date.now() + sessionLifetimeMs).toISOString());
-    setSessionCookie(res, sessionToken, sessionLifetimeMs, false);
+    setSessionCookie(res, sessionToken, sessionLifetimeMs, this.secureLocalSession(req));
     return json(res, 200, { user: account.user, tenant: account.tenant, tenants: this.store.tenantsForUser(account.user.id) });
   }
 
@@ -144,7 +157,11 @@ export class AuthService {
   logout(req: IncomingMessage, res: ServerResponse) {
     const token = cookieValue(req.headers.cookie || '', cookieName);
     if (token) this.store.removeSession(hash(token));
-    setSessionCookie(res, '', 0, false);
+    setSessionCookie(res, '', 0, this.secureLocalSession(req));
+  }
+
+  private secureLocalSession(req: IncomingMessage) {
+    return Boolean(this.localPublicHost && req.headers.host?.toLowerCase() === this.localPublicHost);
   }
 
   private redirectUri(req: IncomingMessage) {
