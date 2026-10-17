@@ -294,7 +294,9 @@ async function agentBrowserAction(input) {
   if (owner !== 'agent') throw new Error('The user currently controls this computer');
   const action = String(input.action || '');
   const browserPage = await page();
-  return rendererHealth.run(async () => {
+  await rendererHealth.run(() => browserPage.evaluate(() => document.readyState));
+  // Navigation/action deadlines are separate from the three-second renderer probe.
+  return (async () => {
     if (owner !== 'agent') throw new Error('The user currently controls this computer');
     if (action === 'inspect') {
       const snapshot = await browserPage.evaluate(() => {
@@ -363,9 +365,9 @@ async function agentBrowserAction(input) {
       }
     } else throw new Error('Unsupported Agent browser action');
 
-    const title = await browserPage.title();
+    const title = await rendererHealth.run(() => browserPage.title());
     return { ready: true, action, url: safePageUrl(browserPage.url()), title: title.slice(0, 300) };
-  });
+  })();
 }
 
 http.createServer(async (req, res) => {
@@ -401,6 +403,15 @@ http.createServer(async (req, res) => {
       return;
     }
     if (req.method === 'GET' && pathname === '/v1/control') return send(res, 200, { owner });
+    if (req.method === 'GET' && pathname === '/v1/browser/context') {
+      if (owner !== 'agent') return send(res, 409, { owner, error: 'The user currently controls this computer' });
+      const browserPage = await page();
+      const session = await browserPage.context().newCDPSession(browserPage);
+      try {
+        const { targetInfo } = await session.send('Target.getTargetInfo');
+        return send(res, 200, { owner, targetId: targetInfo.targetId });
+      } finally { await session.detach(); }
+    }
     if (req.method === 'POST' && pathname === '/v1/control') {
       const input = await body(req);
       if (input.owner !== 'agent' && input.owner !== 'user') return send(res, 400, { error: 'invalid control owner' });

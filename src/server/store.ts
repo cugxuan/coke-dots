@@ -1051,6 +1051,8 @@ export class Store {
       if (keys.some(key => event.usage![key] < (execution.usage?.[key] || 0))) return false;
       execution.totalUsage = Object.fromEntries(keys.map(key => [key, (execution.totalUsage?.[key] || 0) - (execution.usage?.[key] || 0) + event.usage![key]])) as unknown as TokenUsage;
       execution.usage = event.usage;
+    } else if (event.kind === 'metrics' && event.timing) {
+      execution.timing = { ...execution.timing, ...event.timing };
     } else {
       const previous = execution.events.find(item => item.id === event.id);
       const next = { ...event, at: previous?.at || new Date().toISOString() };

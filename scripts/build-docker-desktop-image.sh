@@ -8,7 +8,7 @@ revision=$(git rev-parse HEAD)
 image="coke-dots-linux-desktop:sha-${revision}"
 docker_command=(docker)
 if [[ -n "${DOCKER_HOST:-}" ]]; then docker_command+=(--host "$DOCKER_HOST"); fi
-image_inputs=(deploy/linux-desktop package.json package-lock.json .dockerignore scripts/build-docker-desktop-image.sh)
+image_inputs=(deploy/linux-desktop vendor package.json package-lock.json .dockerignore scripts/build-docker-desktop-image.sh)
 if [[ -n "$(git status --porcelain --untracked-files=all -- "${image_inputs[@]}")" ]]; then
   echo 'Commit cloud desktop image inputs before building a release tag.' >&2
   exit 1

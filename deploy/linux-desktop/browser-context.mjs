@@ -21,6 +21,11 @@ export async function getBrowserPage(context) {
     if (!context || typeof context.pages !== 'function') throw new BrowserContextNotReadyError();
     const pages = context.pages();
     if (!Array.isArray(pages)) throw new BrowserContextNotReadyError();
+    const visible = await Promise.all(pages.map(candidate => typeof candidate.evaluate !== 'function' ? false : Promise.race([
+      Promise.resolve(candidate.evaluate(() => document.visibilityState === 'visible')).catch(() => false),
+      new Promise(resolve => { const timer = setTimeout(() => resolve(false), 250); timer.unref?.(); }),
+    ])));
+    if (visible.some(Boolean)) return pages[visible.findIndex(Boolean)];
     if (pages[0]) return pages[0];
     if (typeof context.newPage !== 'function') throw new BrowserContextNotReadyError();
     return await context.newPage();

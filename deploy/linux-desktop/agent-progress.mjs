@@ -26,16 +26,22 @@ export function tokenUsage(value, format = 'pi') {
 }
 
 export function normalizeProgress(value, secrets = []) {
-  if (!value || typeof value !== 'object' || !['status', 'tool', 'usage', 'commentary'].includes(value.kind)) return null;
+  if (!value || typeof value !== 'object' || !['status', 'tool', 'usage', 'commentary', 'metrics'].includes(value.kind)) return null;
   const id = progressText(value.id, secrets, 160);
   const message = progressText(value.message, secrets, 240);
   if (!id || !message) return null;
+  if (value.kind === 'metrics') {
+    const keys = ['dispatchMs', 'schedulerMs', 'queueMs', 'startupMs', 'runtimeMs', 'modelMs', 'toolMs', 'browserMs', 'pageWaitMs', 'modelCalls', 'toolCalls', 'contextTokens', 'compactions', 'compactionMs'];
+    const timing = Object.fromEntries(keys.filter(key => count(value.timing?.[key]) !== undefined).map(key => [key, value.timing[key]]));
+    return Object.keys(timing).length ? { id, kind: 'metrics', message, timing } : null;
+  }
   if (value.kind === 'usage') {
     const u = value.usage;
     if (!u || !['input', 'output', 'cacheRead', 'cacheWrite', 'total'].every(key => count(u[key]) !== undefined)) return null;
     return { id, kind: 'usage', message, usage: Object.fromEntries(['input', 'output', 'cacheRead', 'cacheWrite', 'total'].map(key => [key, u[key]])) };
   }
   return { id, kind: value.kind, message, ...(typeof value.detail === 'string' ? { detail: progressText(value.detail, secrets) } : {}),
+    ...(count(value.durationMs) !== undefined ? { durationMs: value.durationMs } : {}),
     ...(['running', 'done', 'failed', 'interrupted'].includes(value.state) ? { state: value.state } : {}) };
 }
 
@@ -47,14 +53,18 @@ export function createPiProgressReporter(onProgress, secrets = []) {
   const emit = event => { const safe = normalizeProgress(event, secrets); if (safe) onProgress?.(safe); };
   const phase = message => emit({ id: 'phase', kind: 'status', message, state: 'running' });
   return event => {
+    if (event.type === 'compaction_start') phase('正在整理上下文…');
+    if (event.type === 'compaction_end') {
+      emit({ id: 'compaction', kind: 'status', message: event.errorMessage ? '上下文整理失败' : event.aborted ? '上下文整理已中断' : '上下文已整理', ...(event.errorMessage ? { detail: event.errorMessage } : {}), state: event.errorMessage ? 'failed' : event.aborted ? 'interrupted' : 'done' });
+    }
     if (event.type === 'message_start' && event.message?.role === 'assistant') phase('正在分析任务…');
     if (event.type === 'message_update' && event.assistantMessageEvent?.type === 'thinking_start') phase('正在思考下一步…');
     if (event.type === 'tool_execution_start') {
-      const name = progressText(event.toolName, secrets, 80) || '工具';
+      const name = ({ browser_execute: '浏览器操作', set_reasoning: '调整分析深度' })[event.toolName] || progressText(event.toolName, secrets, 80) || '工具';
       const args = event.args || {};
       const detail = ['command', 'path', 'pattern', 'url', 'action', 'selector'].filter(key => typeof args[key] === 'string')
         .map(key => `${key}: ${args[key]}`).join('\n');
-      const tool = { id: `tool:${event.toolCallId}`, kind: 'tool', message: name, detail, state: 'running', updated: 0 };
+      const tool = { id: `tool:${event.toolCallId}`, kind: 'tool', message: name, detail, state: 'running', updated: 0, began: Date.now() };
       tools.set(event.toolCallId, tool);
       emit(tool); phase(`正在执行 ${name}…`);
     }
@@ -66,7 +76,7 @@ export function createPiProgressReporter(onProgress, secrets = []) {
       tool.updated = Date.now();
       const result = ended ? event.result : event.partialResult;
       const output = result?.content?.filter(item => item.type === 'text').map(item => item.text || '').join('\n') || '';
-      emit({ ...tool, detail: `${tool.detail}${output ? `\n\n${output}` : ''}`, state: ended ? event.isError ? 'failed' : 'done' : 'running' });
+      emit({ ...tool, detail: `${tool.detail}${output ? `\n\n${output}` : ''}`, ...(ended ? { durationMs: Date.now() - tool.began } : {}), state: ended ? event.isError ? 'failed' : 'done' : 'running' });
       if (ended) { tools.delete(event.toolCallId); phase('正在整理结果…'); }
     }
     if (event.type === 'message_end' && event.message?.role === 'assistant') {

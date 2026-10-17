@@ -9,13 +9,21 @@ export type ActionRuleMode = 'without-asking' | 'when-requested' | 'ask-before' 
 export type { ScheduleSpec } from './scheduling.ts';
 
 export interface TokenUsage { input: number; output: number; cacheRead: number; cacheWrite: number; total: number }
+export interface AgentTiming {
+  dispatchMs?: number; schedulerMs?: number; queueMs?: number; startupMs?: number; runtimeMs?: number;
+  modelMs?: number; toolMs?: number; browserMs?: number; pageWaitMs?: number;
+  modelCalls?: number; toolCalls?: number; contextTokens?: number;
+  compactions?: number; compactionMs?: number;
+}
 export interface AgentProgress {
   id: string;
-  kind: 'status' | 'tool' | 'usage' | 'commentary';
+  kind: 'status' | 'tool' | 'usage' | 'commentary' | 'metrics';
   message: string;
   detail?: string;
   state?: 'running' | 'done' | 'failed' | 'interrupted';
   usage?: TokenUsage;
+  timing?: AgentTiming;
+  durationMs?: number;
 }
 export interface TaskExecution {
   runId: string;
@@ -23,6 +31,7 @@ export interface TaskExecution {
   finishedAt?: string;
   events: (AgentProgress & { at: string })[];
   usage?: TokenUsage;
+  timing?: AgentTiming;
   totalUsage?: TokenUsage;
   runs: number;
 }

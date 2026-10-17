@@ -159,6 +159,7 @@ async function startRemote() {
             await new Promise(resolve => setTimeout(resolve, 2500));
             res.write(JSON.stringify({ type: 'progress', event: { id: 'tool:write', kind: 'tool', message: 'write', detail: 'path: tetris.html\n文件已创建', state: 'done' } }) + '\n');
             res.write(JSON.stringify({ type: 'progress', event: { id: 'usage', kind: 'usage', message: '模型用量', usage: { input: 120, output: 30, cacheRead: 20, cacheWrite: 0, total: 150 } } }) + '\n');
+            res.write(JSON.stringify({ type: 'progress', event: { id: 'metrics', kind: 'metrics', message: '执行耗时', timing: { modelCalls: 2, modelMs: 1200, toolMs: 2500, queueMs: 10 } } }) + '\n');
           }
           const html = '<!doctype html><html><body><main id="demo-artifact">正在加载游戏…</main><script src="game.js"></script></body></html>';
           const script = "document.querySelector('#demo-artifact').textContent = '俄罗斯方块预览';";
@@ -423,6 +424,8 @@ try {
     return state.tasks.find(task => task.id === id)?.status === 'done';
   }, created.task.id, { timeout: 20_000 });
   await progress.getByTestId('task-token-usage').getByText('本轮 150 tokens').waitFor();
+  await progress.getByTestId('task-timing').getByText('耗时明细 · 2 轮模型调用').click();
+  await progress.getByTestId('task-timing').getByText(/模型响应 1.2 秒/).waitFor();
   await page.locator('.timeline .message.dot').filter({ hasText: '俄罗斯方块已创建' }).waitFor();
   assert.equal(await progress.getByRole('button', { name: '任务详情 →' }).count(), 1, 'Completing a task must leave the Dot conversation open');
   await page.reload();

@@ -25,6 +25,8 @@ revision=$(git rev-parse HEAD)
 image="coke-dots-linux-desktop:sha-${revision}"
 image_inputs=(
   deploy/linux-desktop
+  vendor
+  .dockerignore
   package.json
   package-lock.json
   scripts/build-linux-desktop-image.sh

@@ -9,6 +9,8 @@ const usageTitle = (usage: TokenUsage) => `输入 ${number(usage.input)}（含�
 export function TaskProgress({ task, onOpen, onBack }: { task: Task; onOpen?: () => void; onBack?: () => void }) {
   const [, setClock] = useState(0);
   const execution = task.execution;
+  const timing = execution?.timing;
+  const seconds = (value = 0) => `${(value / 1000).toFixed(1)} 秒`;
   const active = task.status === 'working' && !execution?.finishedAt;
   useEffect(() => {
     if (!active) return;
@@ -23,10 +25,17 @@ export function TaskProgress({ task, onOpen, onBack }: { task: Task; onOpen?: ()
     <header><span className={`task-progress-badge ${task.status}`}>{statusText[task.status]}</span><strong>{onOpen ? task.title : '执行过程'}</strong>{(onOpen || onBack) && <button type="button" onMouseDown={event => event.preventDefault()} onClick={onOpen || onBack}>{onOpen ? '任务详情 →' : '返回主聊天'}</button>}</header>
     <div className="task-progress-state" role="status"><span className={active ? 'task-progress-pulse' : ''} aria-hidden="true">●</span><span>{current}</span>{execution && <time>{elapsed < 60 ? `${elapsed} 秒` : `${Math.floor(elapsed / 60)} 分 ${elapsed % 60} 秒`}</time>}</div>
     {events.length > 0 && <details className="task-progress-events"><summary onMouseDown={event => event.preventDefault()}>执行记录 · {events.length} 项{events.length === 50 ? '（最近 50 项）' : ''}</summary><ol>{events.map(event => <li key={event.id} data-state={event.state}>
-      <div><span>{event.kind === 'tool' ? ({ running: '执行中', done: '已完成', failed: '失败', interrupted: '已中断' }[event.state || 'done']) : '说明'}</span><strong>{event.message}</strong></div>
+      <div><span>{event.kind === 'tool' ? ({ running: '执行中', done: '已完成', failed: '失败', interrupted: '已中断' }[event.state || 'done']) : '说明'}</span><strong>{event.message}</strong>{event.durationMs !== undefined && <time>{seconds(event.durationMs)}</time>}</div>
       {event.detail && <details><summary onMouseDown={event => event.preventDefault()}>查看内容</summary><pre>{event.detail}</pre></details>}
     </li>)}</ol></details>}
     {task.error && <p className="task-progress-error">{task.error}</p>}
+    {timing && <details className="task-progress-timing" data-testid="task-timing"><summary onMouseDown={event => event.preventDefault()}>耗时明细{timing.modelCalls !== undefined ? ` · ${timing.modelCalls} 轮模型调用` : ''}</summary><p>
+      连接 {seconds(timing.dispatchMs)} · 排队 {seconds((timing.schedulerMs || 0) + (timing.queueMs || 0))} · 启动 {seconds(timing.startupMs)}<br />
+      模型响应 {seconds(timing.modelMs)} · 工具执行 {seconds(timing.toolMs)}
+      {timing.browserMs !== undefined && <> · 其中浏览器 {seconds(timing.browserMs)}</>}
+      {!!timing.pageWaitMs && <>（导航与显式等待 {seconds(timing.pageWaitMs)}）</>}
+      {!!timing.compactions && <><br />上下文整理 {timing.compactions} 次 · {seconds(timing.compactionMs)}</>}
+    </p></details>}
     <footer data-testid="task-token-usage">{execution?.usage ? <>
       <span title={usageTitle(execution.usage)}>本轮 {number(execution.usage.total)} tokens</span>
       <span>输入 {number(execution.usage.input)} · 输出 {number(execution.usage.output)}</span>

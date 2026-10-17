@@ -4,6 +4,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { normalizeProgress, progressText } from './agent-progress.mjs';
+import { agentTaskTimeoutMs, agentShutdownGraceMs } from './agent-limits.mjs';
 
 const token = String(process.env.DOTS_AGENT_RUNTIME_TOKEN || '');
 const port = Number(process.env.DOTS_AGENT_RUNTIME_PORT || 8083);
@@ -129,6 +130,7 @@ function runKernel(input, requestSignal, onProgress) {
       reject(new Error('Agent task was cancelled'));
     };
     requestSignal?.addEventListener('abort', entry.onAbort, { once: true });
+    entry.enqueuedAt = performance.now();
     queue.push(entry);
     void drainQueue();
   });
@@ -137,6 +139,7 @@ function runKernel(input, requestSignal, onProgress) {
 async function drainQueue() {
   if (active || !queue.length) return;
   const entry = queue.shift();
+  entry.onProgress?.({ id: 'queue-metrics', kind: 'metrics', message: '排队耗时', timing: { queueMs: Math.round(performance.now() - entry.enqueuedAt) } });
   const slot = { taskId: String(entry.input.taskId || ''), child: null, abort: null, interruptedByUser: false };
   active = slot;
   try { entry.resolve(await executeKernel(entry.input, entry.requestSignal, slot, entry.onProgress)); }
@@ -183,6 +186,7 @@ async function executeKernel(input, requestSignal, slot, onProgress) {
   let stdout = '';
   let pending = '';
   let streamedResult;
+  let adapterError;
   let invalidStream = false;
   const decoder = new StringDecoder('utf8');
   const secrets = [modelConfig.apiKey, dingtalkDocumentsBridge?.token, dingtalkCalendarBridge?.token, token, process.env.LINUX_DESKTOP_WORKER_TOKEN].filter(Boolean);
@@ -200,7 +204,10 @@ async function executeKernel(input, requestSignal, slot, onProgress) {
         if (frame.type === 'progress') {
           const event = normalizeProgress(frame.event, secrets);
           if (event) onProgress(event);
-        } else if (frame.type === 'result') streamedResult = frame.result;
+        } else if (frame.type === 'result') {
+          if (streamedResult) invalidStream = true;
+          streamedResult = frame.result;
+        } else if (frame.type === 'error') adapterError = progressText(frame.error, secrets, 1200);
       } catch { /* Legacy adapters can return formatted JSON; parse it after exit. */ }
     }
   });
@@ -218,20 +225,22 @@ async function executeKernel(input, requestSignal, slot, onProgress) {
     ...(dingtalkDocumentsBridge ? { dingtalkDocumentsBridge } : {}),
     ...(dingtalkCalendarBridge ? { dingtalkCalendarBridge } : {}),
   }));
-  const timer = setTimeout(() => child.kill('SIGTERM'), 14 * 60_000);
+  const timer = setTimeout(() => { slot.timedOut = true; abort.abort(); }, agentTaskTimeoutMs);
   const controlPoll = setInterval(() => { void controlOwner().then(owner => { if (owner === 'user') pauseActive(); }).catch(() => child.kill('SIGTERM')); }, 500);
   const onRequestAbort = () => abort.abort();
   requestSignal?.addEventListener('abort', onRequestAbort, { once: true });
-  abort.signal.addEventListener('abort', () => { child.kill('SIGTERM'); setTimeout(() => child.kill('SIGKILL'), 2000).unref(); }, { once: true });
+  abort.signal.addEventListener('abort', () => { child.kill('SIGTERM'); setTimeout(() => child.kill('SIGKILL'), agentShutdownGraceMs).unref(); }, { once: true });
   try {
     const code = await new Promise((resolve, reject) => {
       child.once('error', reject);
       child.once('close', value => resolve(value ?? 1));
     });
     if (requestSignal?.aborted) throw new Error('Agent task was cancelled');
+    if (slot.timedOut) throw new Error(`Agent 执行超过 ${agentTaskTimeoutMs / 60_000} 分钟限制，已停止。任务目录里的中间文件和会话已保留，请检查后再继续。`);
     if (slot.interruptedByUser) return { taskId, status: 'waiting', pausedForControl: true, message: '我已暂停当前操作，因为你正在接管电脑。交还电脑后，请告诉我继续。', engine, sessionId: typeof input.sessionId === 'string' ? input.sessionId : null };
     if (invalidStream) throw new Error('Agent progress frame exceeded its size limit');
-    if (code !== 0) throw new Error(`Agent adapter exited with code ${code}`);
+    if (adapterError) throw new Error(`Agent 内核执行失败：${adapterError}`);
+    if (code !== 0) throw new Error(`Agent 内核退出（code ${code}）。任务目录里的中间文件和会话已保留。`);
     let result;
     try {
       result = redactSecret(streamedResult || JSON.parse(stdout), modelConfig.apiKey);

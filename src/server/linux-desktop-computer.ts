@@ -1,4 +1,5 @@
 import { readAgentResponse } from './agent-progress-stream.ts';
+import { agentRequestTimeoutMs } from '../../deploy/linux-desktop/agent-limits.mjs';
 import type { AgentProgress } from '../shared/types.ts';
 import { createHmac, createHash } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -154,6 +155,7 @@ export class LinuxDesktopComputer implements ComputerRuntime {
   }
 
   async runAgentTask(input: { engine: string; taskId: string; prompt: string; sessionId: string | null; modelConfig?: { apiKey: string; baseUrl: string; model: string }; dingtalkDocumentsBridge?: { url: string; token: string; actions: Array<'search' | 'fetch' | 'create'> }; dingtalkCalendarBridge?: { url: string; token: string; actions: Array<'list'> }; incidentRemediation?: boolean; onProgress?: (event: AgentProgress) => void; signal?: AbortSignal }) {
+    const dispatched = performance.now();
     await this.ensureConnection();
     const owner = await this.request('/v1/control');
     if (!owner.ok) await this.throwWorkerError(owner, `Linux 云电脑控制权读取失败（HTTP ${owner.status}）`);
@@ -165,8 +167,9 @@ export class LinuxDesktopComputer implements ComputerRuntime {
       method: 'POST',
       headers: { authorization: `Bearer ${this.connection!.agentToken}`, 'content-type': 'application/json', accept: 'application/x-ndjson' },
       body: JSON.stringify({ engine: input.engine, taskId: input.taskId, prompt: input.prompt, sessionId: input.sessionId, cwd: `tasks/${input.taskId}`, ...(input.modelConfig ? { modelConfig: input.modelConfig } : {}), ...(input.dingtalkDocumentsBridge ? { dingtalkDocumentsBridge: input.dingtalkDocumentsBridge } : {}), ...(input.dingtalkCalendarBridge ? { dingtalkCalendarBridge: input.dingtalkCalendarBridge } : {}), ...(input.incidentRemediation ? { incidentRemediation: true } : {}), computer: { baseUrl: 'http://127.0.0.1:8082', workerToken: this.connection!.workerToken, actions: ['inspect', 'navigate', 'click', 'fill', 'select', 'check', 'uncheck', 'press', 'open_artifact'] } }),
-      signal: input.signal ? AbortSignal.any([AbortSignal.timeout(15 * 60_000), input.signal]) : AbortSignal.timeout(15 * 60_000),
+      signal: input.signal ? AbortSignal.any([AbortSignal.timeout(agentRequestTimeoutMs), input.signal]) : AbortSignal.timeout(agentRequestTimeoutMs),
     });
+    input.onProgress?.({ id: 'dispatch-metrics', kind: 'metrics', message: '连接耗时', timing: { dispatchMs: Math.round(performance.now() - dispatched) } });
     const result = await readAgentResponse(response, input.onProgress) as { error?: string; status?: string; message?: string; nextMinutes?: number; sessionId?: string; pageAction?: unknown; delegations?: unknown[]; pausedForControl?: boolean };
     if (!response.ok) throw new Error(result.error || `Linux Agent 运行时返回 HTTP ${response.status}`);
     if (typeof result.status !== 'string' || typeof result.message !== 'string') throw new Error('Linux Agent 运行时返回了无效结果');

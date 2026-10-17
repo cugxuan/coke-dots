@@ -96,6 +96,7 @@ export class Worker {
     if (modelConfig) for (const engine of remoteEngines) if (!availableEngines.includes(engine)) availableEngines.push(engine);
     this.store.updateTask(task.id, { status: 'working', error: null }, task.tenantId);
     const runId = this.store.beginTaskExecution(task.id, task.tenantId);
+    this.store.recordTaskProgress(task.id, task.tenantId, runId, { id: 'scheduler-metrics', kind: 'metrics', message: '调度耗时', timing: { schedulerMs: Math.max(0, Date.now() - Date.parse(task.nextRunAt || task.updatedAt)) } });
     this.store.addEntry('system', `使用 ${task.engine} 开始处理。`, task.id, task.tenantId);
     this.onChange();
     try {

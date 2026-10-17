@@ -74,6 +74,8 @@ test('execution survives reopen, scopes updates by tenant and run, and counts us
     assert.equal(store.recordTaskProgress(task.id, 'legacy', 'stale-run', usage), false);
     assert.equal(store.recordTaskProgress(task.id, 'legacy', run, usage), true);
     store.recordTaskProgress(task.id, 'legacy', run, usage);
+    store.recordTaskProgress(task.id, 'legacy', run, { id: 'metrics', kind: 'metrics', message: 'Timing', timing: { modelMs: 100, modelCalls: 1 } });
+    store.recordTaskProgress(task.id, 'legacy', run, { id: 'dispatch', kind: 'metrics', message: 'Timing', timing: { dispatchMs: 25 } });
     store.recordTaskProgress(task.id, 'legacy', run, { id: 'tool:1', kind: 'tool', message: 'bash', state: 'running' });
     store.updateTask(task.id, { status: 'paused' });
     assert.equal(store.recordTaskProgress(task.id, 'legacy', run, usage), false);
@@ -81,9 +83,11 @@ test('execution survives reopen, scopes updates by tenant and run, and counts us
     assert.equal(store.getTask(task.id)?.execution?.events[0]?.state, 'interrupted');
     store.close(); store = new Store(directory);
     assert.equal(store.getTask(task.id)?.execution?.totalUsage?.total, 120);
+    assert.deepEqual(store.getTask(task.id)?.execution?.timing, { modelMs: 100, modelCalls: 1, dispatchMs: 25 });
     store.updateTask(task.id, { status: 'working' });
     const retry = store.beginTaskExecution(task.id, 'legacy');
     assert.equal(store.getTask(task.id)?.execution?.usage, undefined);
+    assert.equal(store.getTask(task.id)?.execution?.timing, undefined);
     store.recordTaskProgress(task.id, 'legacy', retry, usage);
     assert.equal(store.getTask(task.id)?.execution?.totalUsage?.total, 240);
     assert.equal(store.recordTaskProgress(task.id, 'legacy', run, usage), false);

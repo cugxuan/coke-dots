@@ -1,6 +1,8 @@
 **
 !package.json
 !package-lock.json
+!vendor/
+!vendor/**
 !deploy/
 !deploy/linux-desktop/
 !deploy/linux-desktop/**

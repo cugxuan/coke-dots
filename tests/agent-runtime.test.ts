@@ -69,6 +69,7 @@ test('cloud Agent runtime serializes desktop access, isolates runtime credential
       "const configDelivered = input.modelConfig?.apiKey === modelKey && input.modelConfig?.baseUrl === 'https://api.example.test/v1' && input.modelConfig?.model === 'runtime-test-model';",
       "await appendFile(process.env.DOTS_TEST_MARKER, `start ${input.taskId} engine=${input.engine} config=${configDelivered} keyInEnv=${keyInEnv} dingtalkBridge=${Boolean(bridgeToken)} bridgeTokenInEnv=${bridgeTokenInEnv} calendarBridge=${Boolean(calendarToken)} calendarTokenInEnv=${calendarTokenInEnv}\\n`);",
       "await (await import('node:fs/promises')).writeFile('minesweeper.html', '<!doctype html><title>Minesweeper</title>');",
+      "if (input.prompt === 'model failure') { process.stdout.write(JSON.stringify({type:'error',error:'Model provider rejected request '+modelKey})+'\\n'); process.exit(1); }",
       "if (input.streamProgress) { process.stdout.write(JSON.stringify({ type: 'progress', event: { id: 'tool:1', kind: 'tool', message: 'bash', detail: modelKey, state: 'running' } }) + '\\n'); await new Promise(resolve => setTimeout(resolve, 150)); process.stdout.write(JSON.stringify({ type: 'result', result: { status: 'done', message: 'streamed done' } }) + '\\n'); process.exit(0); }",
       "if (input.prompt === 'hold') await new Promise(resolve => setTimeout(resolve, 30000));",
       'await new Promise(resolve => setTimeout(resolve, 80));',
@@ -126,8 +127,19 @@ test('cloud Agent runtime serializes desktop access, isolates runtime credential
     const streamedEvents: unknown[] = [];
     const streamedResult = await readAgentResponse(streamedResponse, event => streamedEvents.push(event));
     assert.equal(streamedResult.message, 'streamed done');
-    assert.equal(streamedEvents.length, 1);
+    assert.equal(streamedEvents.filter((event: any) => event.kind === 'tool').length, 1);
+    assert(streamedEvents.some((event: any) => event.kind === 'metrics' && event.timing.queueMs >= 0));
     assert.doesNotMatch(JSON.stringify(streamedEvents), /cloud-runtime-model-key-never-print/);
+    const failedResponse = await fetch(`${runtimeUrl}/v1/tasks/run`, {
+      method: 'POST', headers: { authorization: 'Bearer agent-test-token-never-print', 'content-type': 'application/json', accept: 'application/x-ndjson' },
+      body: JSON.stringify({ engine: 'pi', taskId: '88888888-8888-4888-8888-888888888888', prompt: 'model failure', cwd: 'tasks/88888888-8888-4888-8888-888888888888', modelConfig }),
+    });
+    await assert.rejects(readAgentResponse(failedResponse), error => {
+      assert.match(String(error), /Model provider rejected/);
+      assert.doesNotMatch(String(error), /cloud-runtime-model-key-never-print/);
+      return true;
+    });
+    assert.match(await readFile(join(workspace, 'tasks/88888888-8888-4888-8888-888888888888/minesweeper.html'), 'utf8'), /Minesweeper/, 'Failure preserves partial files');
     await writeFile(markerPath, '');
 
     const missingConfig = await submit('44444444-4444-4444-8444-444444444444', 'missing config', null);

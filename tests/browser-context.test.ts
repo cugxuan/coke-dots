@@ -38,3 +38,9 @@ test('returns the current page or creates one when the default context is ready'
   assert.equal(await getBrowserPage({ pages: () => [], newPage: async () => { created = true; return newPage; } }), newPage);
   assert.equal(created, true);
 });
+
+test('attaches the visible user tab instead of the first background tab', async () => {
+  const background = { evaluate: async () => false };
+  const visible = { evaluate: async () => true };
+  assert.equal(await getBrowserPage({ pages: () => [background, visible] }), visible);
+});
