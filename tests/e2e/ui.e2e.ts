@@ -807,6 +807,41 @@ try {
     await screenshot(alphaPage!, '02-alpha-home');
   });
 
+  await recordStep('Authenticated chat events disable proxy buffering and deliver a snapshot without closing the stream', async () => {
+    const eventStream = await alphaPage!.evaluate(async () => {
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 5000);
+      try {
+        const response = await fetch('/api/events', { signal: controller.signal });
+        const reader = response.body!.getReader();
+        const decoder = new TextDecoder();
+        let frame = '';
+        while (!frame.includes('\n\n')) {
+          const chunk = await reader.read();
+          if (chunk.done) throw new Error('The event stream ended before its initial snapshot');
+          frame += decoder.decode(chunk.value, { stream: true });
+        }
+        return {
+          status: response.status,
+          contentType: response.headers.get('content-type'),
+          buffering: response.headers.get('x-accel-buffering'),
+          cacheControl: response.headers.get('cache-control'),
+          snapshot: JSON.parse(frame.split('\n\n')[0].slice('data: '.length)) as { tasks: unknown[]; entries: unknown[] },
+        };
+      } finally {
+        window.clearTimeout(timeout);
+        controller.abort();
+      }
+    });
+    assert.equal(eventStream.status, 200);
+    assert.equal(eventStream.contentType, 'text/event-stream');
+    assert.equal(eventStream.buffering, 'no', 'nginx/OpenResty must forward chat and voice results immediately');
+    assert.match(eventStream.cacheControl || '', /no-store/);
+    assert.match(eventStream.cacheControl || '', /no-transform/);
+    assert(Array.isArray(eventStream.snapshot.tasks));
+    assert(Array.isArray(eventStream.snapshot.entries));
+  });
+
   await recordStep('Only the supported model, Pi, and DeepSeek Harness choices are selectable', async () => {
     const options = await alphaPage!.getByTestId('engine-select').locator('option').evaluateAll(elements => elements.map(element => (element as HTMLOptionElement).value));
     assert.deepEqual(options, ['model', 'pi', 'dsh']);

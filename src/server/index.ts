@@ -355,7 +355,13 @@ const server = createServer(async (req, res) => {
 
   try {
     if (path === '/api/events' && req.method === 'GET') {
-      res.writeHead(200, { 'Content-Type': 'text/event-stream', Connection: 'keep-alive', 'Cache-Control': 'no-store' });
+      // Chat replies and voice task results must reach the browser immediately,
+      // even when the control plane is served through nginx/OpenResty.
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream', Connection: 'keep-alive',
+        'Cache-Control': 'no-store, no-transform', 'X-Accel-Buffering': 'no',
+      });
+      res.flushHeaders();
       clients.set(res, session.tokenHash);
       res.write(`data: ${JSON.stringify(snapshot(session.tenant.id))}\n\n`);
       req.on('close', () => clients.delete(res));
