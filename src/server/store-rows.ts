@@ -2,6 +2,8 @@ import type { Entry, ScheduleSpec, Task, TaskEngine, TaskStatus, Watch } from '.
 import { scheduleForTask, validateScheduleSpec } from '../shared/scheduling.ts';
 
 export function toTask(r: Record<string, unknown>): Task {
+  let execution: Task['execution'];
+  try { if (typeof r.execution_json === 'string') execution = JSON.parse(r.execution_json); } catch { /* Older tasks have no execution telemetry. */ }
   const scheduleMinutes = r.schedule_minutes == null ? null : Number(r.schedule_minutes);
   let scheduleSpec: ScheduleSpec | null = null;
   if (typeof r.schedule_json === 'string') {
@@ -9,6 +11,7 @@ export function toTask(r: Record<string, unknown>): Task {
   }
   scheduleSpec = scheduleForTask(scheduleSpec, scheduleMinutes);
   return {
+    ...(execution ? { execution } : {}),
     id: String(r.id), tenantId: String(r.tenant_id), parentTaskId: r.parent_task_id == null ? null : String(r.parent_task_id), title: String(r.title), instruction: String(r.instruction),
     engine: r.engine as TaskEngine, agentSessionId: r.agent_session_id == null ? null : String(r.agent_session_id),
     status: r.status as TaskStatus, priority: Number(r.priority),

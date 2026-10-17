@@ -196,6 +196,7 @@ export function initializeStoreSchema(db: DatabaseSync) {
       WHERE user_id IS NULL;
       UPDATE dingtalk_stream_event_receipts SET group_name=COALESCE((SELECT group_name FROM dingtalk_group_selections WHERE dingtalk_group_selections.tenant_id=dingtalk_stream_event_receipts.tenant_id AND dingtalk_group_selections.conversation_id=dingtalk_stream_event_receipts.conversation_id AND dingtalk_group_selections.user_id=dingtalk_stream_event_receipts.user_id),'钉钉群')
       WHERE group_name='';`);
+  addColumnIfMissing('tasks', 'execution_json', 'TEXT');
   const now = new Date().toISOString();
   db.prepare("UPDATE tasks SET status='queued', next_run_at=?, updated_at=? WHERE status='working'").run(now, now);
   db.prepare('DELETE FROM auth_sessions WHERE expires_at <= ?').run(now);

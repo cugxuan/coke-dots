@@ -3,6 +3,7 @@ import { mkdir, realpath, rm, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
 import { Type } from 'typebox';
+import { createPiProgressReporter } from './agent-progress.mjs';
 
 const decisionStatuses = new Set(['done', 'waiting', 'scheduled', 'delegating']);
 const piTools = ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls'];
@@ -77,6 +78,8 @@ async function runPi(input, cwd, config, injectedSdk) {
     sessionManager,
   });
   const abortSession = () => session.dispose();
+  const report = createPiProgressReporter(input.onProgress, [config.apiKey, input.computer?.workerToken, input.dingtalkDocumentsBridge?.token, input.dingtalkCalendarBridge?.token]);
+  const unsubscribe = session.subscribe?.(report);
   if (input.signal?.aborted) abortSession();
   else input.signal?.addEventListener('abort', abortSession, { once: true });
   try {
@@ -89,6 +92,7 @@ async function runPi(input, cwd, config, injectedSdk) {
     const text = assistant?.content?.filter(item => item?.type === 'text').map(item => item.text || '').join('\n') || '';
     return { ...parseDecision(text), sessionId: sessionManager.getSessionId() };
   } finally {
+    unsubscribe?.();
     input.signal?.removeEventListener('abort', abortSession);
     session.dispose();
   }
@@ -598,8 +602,9 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(im
   process.once('SIGTERM', () => controller.abort(new Error('Task stopped')));
   try {
     input = await readInput();
-    const result = await runCloudKernel({ ...input, signal: controller.signal });
-    process.stdout.write(JSON.stringify(result));
+    const result = await runCloudKernel({ ...input, signal: controller.signal,
+      onProgress: input.streamProgress ? event => process.stdout.write(`${JSON.stringify({ type: 'progress', event })}\n`) : undefined });
+    process.stdout.write(input.streamProgress ? `${JSON.stringify({ type: 'result', result })}\n` : JSON.stringify(result));
   } catch (error) {
     const secrets = [input?.modelConfig?.apiKey, input?.computer?.openPublicPageToken].filter(value => typeof value === 'string' && value.length >= 4);
     let diagnostic = error instanceof Error ? error.message : 'Unknown cloud Agent kernel error';

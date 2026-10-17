@@ -152,6 +152,14 @@ async function startRemote() {
             takeoverInterruptedTasks.add(taskId);
             return content(res, 200, 'application/json', JSON.stringify({ status: 'waiting', pausedForControl: true, message: '我已暂停当前操作，因为你正在接管电脑。交还电脑后，请告诉我继续。', engine: 'pi', sessionId: 'cloud-session-1' }));
           }
+          const streamProgress = req.headers.accept === 'application/x-ndjson' && String(body.prompt).includes('俄罗斯方块');
+          if (streamProgress) {
+            res.writeHead(200, { 'content-type': 'application/x-ndjson' });
+            res.write(JSON.stringify({ type: 'progress', event: { id: 'tool:write', kind: 'tool', message: 'write', detail: 'path: tetris.html', state: 'running' } }) + '\n');
+            await new Promise(resolve => setTimeout(resolve, 2500));
+            res.write(JSON.stringify({ type: 'progress', event: { id: 'tool:write', kind: 'tool', message: 'write', detail: 'path: tetris.html\n文件已创建', state: 'done' } }) + '\n');
+            res.write(JSON.stringify({ type: 'progress', event: { id: 'usage', kind: 'usage', message: '模型用量', usage: { input: 120, output: 30, cacheRead: 20, cacheWrite: 0, total: 150 } } }) + '\n');
+          }
           const html = '<!doctype html><html><body><main id="demo-artifact">正在加载游戏…</main><script src="game.js"></script></body></html>';
           const script = "document.querySelector('#demo-artifact').textContent = '俄罗斯方块预览';";
           taskArtifacts.set(String(body.taskId), [
@@ -159,6 +167,7 @@ async function startRemote() {
             { path: 'tetris.html', name: 'tetris.html', mediaType: 'text/html', size: Buffer.byteLength(html), previewable: true },
           ]);
           taskArtifactBodies.set(String(body.taskId), new Map([['tetris.html', html], ['game.js', script]]));
+          if (streamProgress) { res.end(JSON.stringify({ type: 'result', result: { status: 'done', message: '俄罗斯方块已创建，可以在下方预览或在云电脑中打开。', sessionId: 'cloud-session-1' } }) + '\n'); return; }
           return content(res, 200, 'application/json', JSON.stringify({ status: 'done', message: body.engine === 'pi' ? '俄罗斯方块已创建，可以在下方预览或在云电脑中打开。' : `Cloud task completed in ${body.engine}`, sessionId: 'cloud-session-1' }));
         }
       }
@@ -403,11 +412,26 @@ try {
   const created = { status: response.status(), task: await response.json() as { id: string } };
   assert.equal(created.status, 201);
   await page.getByTestId('computer-split').waitFor();
+  const progress = page.getByTestId(`task-progress-${created.task.id}`);
+  await progress.getByRole('button', { name: '任务详情 →' }).waitFor();
+  await progress.locator('.task-progress-events > summary').click();
+  await progress.getByText('write', { exact: true }).waitFor();
+  assert.equal(await progress.locator('li[data-state="running"]').count(), 1, 'Tool progress must arrive while the task is still running in the main chat');
   await page.waitForFunction(async id => {
     const response = await fetch('/api/state');
     const state = await response.json() as { tasks: { id: string; status: string }[] };
     return state.tasks.find(task => task.id === id)?.status === 'done';
   }, created.task.id, { timeout: 20_000 });
+  await progress.getByTestId('task-token-usage').getByText('本轮 150 tokens').waitFor();
+  await page.locator('.timeline .message.dot').filter({ hasText: '俄罗斯方块已创建' }).waitFor();
+  assert.equal(await progress.getByRole('button', { name: '任务详情 →' }).count(), 1, 'Completing a task must leave the Dot conversation open');
+  await page.reload();
+  await page.getByRole('button', { name: '你的 dot', exact: true }).click();
+  await page.getByTestId(`task-progress-${created.task.id}`).getByText('本轮 150 tokens').waitFor();
+  await page.getByTestId(`task-progress-${created.task.id}`).getByRole('button', { name: '任务详情 →' }).click();
+  await page.getByRole('button', { name: '返回主聊天' }).click();
+  await page.getByTestId(`task-progress-${created.task.id}`).getByRole('button', { name: '任务详情 →' }).click();
+  await page.getByRole('button', { name: '电脑', exact: true }).click();
   const debugState = await page.evaluate(async () => await fetch('/api/state').then(response => response.json()) as { availableEngines: string[]; tasks: { id: string; engine: string; status: string; result: string | null; error: string | null }[] });
   assert.equal(agentCalls.length, 1, `Expected one remote Agent dispatch; created=${JSON.stringify(created)}, state=${JSON.stringify(debugState.tasks.find(task => task.id === created.task.id))}, engines=${JSON.stringify(debugState.availableEngines)}, calls=${JSON.stringify(agentCalls)}, remotePaths=${JSON.stringify(remoteHttpPaths.filter(path => path.includes('/agent/')))}, logs=${logs.join('')}`);
   assert.equal(agentCalls[0].engine, 'pi');

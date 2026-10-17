@@ -11,6 +11,7 @@ import { effectiveModelConfig, loadModelSettings, sharedModelApiKeyStatus, model
 import { usesCloudComputer } from './desktop-runtime-config.ts';
 import { sendDesktopNotification, type DesktopNotifier } from './notifications.ts';
 import type { DingTalkService } from './dingtalk.ts';
+import { normalizeProgress } from '../../deploy/linux-desktop/agent-progress.mjs';
 
 export class Worker {
   private static readonly maxActiveTasks = 4;
@@ -94,6 +95,7 @@ export class Worker {
     const availableEngines = (Object.keys(adapters) as Engine[]).filter(engine => adapters[engine].available(task.tenantId));
     if (modelConfig) for (const engine of remoteEngines) if (!availableEngines.includes(engine)) availableEngines.push(engine);
     this.store.updateTask(task.id, { status: 'working', error: null }, task.tenantId);
+    const runId = this.store.beginTaskExecution(task.id, task.tenantId);
     this.store.addEntry('system', `使用 ${task.engine} 开始处理。`, task.id, task.tenantId);
     this.onChange();
     try {
@@ -120,6 +122,10 @@ export class Worker {
         priorResult: task.result, sessionId: task.agentSessionId,
         workspace,
         signal,
+        onProgress: event => {
+          const safe = normalizeProgress(event, [effectiveModelConfig(task.tenantId)?.apiKey || '']);
+          if (safe && !signal.aborted && this.store.recordTaskProgress(task.id, task.tenantId, runId, safe)) this.onChange();
+        },
         onEvent: message => { this.store.addEntry('system', message, task.id, task.tenantId); this.onChange(); },
       };
       const dingtalkDocumentsBridge = useDesktopRuntime && taskOwnerUserId && !task.parentTaskId
@@ -129,7 +135,7 @@ export class Worker {
         ? this.dingtalk?.agentCalendarBridge(task.tenantId, taskOwnerUserId, task.id, task.instruction) || undefined
         : undefined;
       const desktopResult = useDesktopRuntime
-        ? await computer!.runAgentTask!({ engine: task.engine, taskId: task.id, prompt: formatAgentPrompt(input), sessionId: task.agentSessionId, modelConfig: modelConfig || undefined, ...(dingtalkDocumentsBridge ? { dingtalkDocumentsBridge } : {}), ...(dingtalkCalendarBridge ? { dingtalkCalendarBridge } : {}), ...(incidentRemediation ? { incidentRemediation: true } : {}), signal })
+        ? await computer!.runAgentTask!({ engine: task.engine, taskId: task.id, prompt: formatAgentPrompt(input), sessionId: task.agentSessionId, modelConfig: modelConfig || undefined, ...(dingtalkDocumentsBridge ? { dingtalkDocumentsBridge } : {}), ...(dingtalkCalendarBridge ? { dingtalkCalendarBridge } : {}), ...(incidentRemediation ? { incidentRemediation: true } : {}), onProgress: input.onProgress, signal })
         : null;
       const decision = desktopResult
         ? parseDecision(JSON.stringify(desktopResult), desktopResult.sessionId || task.agentSessionId || undefined, { allowDelegation: input.allowDelegation, availableEngines, allowDotMemoryUpdates, dotMemoryIds: dotMemories.map(memory => memory.id) })
@@ -229,6 +235,9 @@ export class Worker {
       this.store.updateTask(task.id, { status: 'failed', error: message.slice(0, 400) }, task.tenantId);
       this.store.addEntry('system', `执行失败：${message.slice(0, 400)}`, task.id, task.tenantId);
       this.notifyIfEnabled(task.tenantId, `“${task.title}”执行失败，需要你查看。`);
+      this.onChange();
+    } finally {
+      this.store.finishTaskExecution(task.id, task.tenantId, runId);
       this.onChange();
     }
   }

@@ -203,7 +203,7 @@ async function startMockModel() {
         const content = JSON.stringify(decision);
         if (response.destroyed || response.writableEnded) return;
         response.writeHead(200, { 'content-type': 'application/json' });
-        response.end(JSON.stringify({ choices: [{ message: { content } }] }));
+        response.end(JSON.stringify({ choices: [{ message: { content } }], usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 } }));
       } catch {
         response.writeHead(400, { 'content-type': 'application/json' });
         response.end(JSON.stringify({ error: 'Invalid test model request' }));
@@ -693,8 +693,16 @@ async function createTask(page: Page, instruction: string, scheduled = false) {
     await page.locator('input.minutes').fill('60');
   }
   await page.getByTestId('task-composer').fill(instruction);
+  const submitted = page.waitForResponse(response => response.url().endsWith('/api/tasks') && response.request().method() === 'POST');
   await page.locator('button.send').click();
+  const task = await (await submitted).json() as { id: string };
+  await page.waitForFunction(() => document.querySelector<HTMLTextAreaElement>('[data-testid=task-composer]')?.value === '');
   await page.locator('.timeline .message.user p').filter({ hasText: instruction }).waitFor({ state: 'visible', timeout: 10_000 });
+  const inlineTask = page.getByTestId(`task-progress-${task.id}`);
+  await inlineTask.waitFor({ state: 'visible' });
+  const openDetails = inlineTask.getByRole('button', { name: '任务详情 →' });
+  if (await openDetails.count()) await openDetails.click();
+  await page.locator('.timeline .task-controls').waitFor({ state: 'visible' });
   if (scheduled) await page.waitForFunction(() => document.querySelector<HTMLInputElement>('.schedule-toggle input[type="checkbox"]')?.checked === false);
 }
 

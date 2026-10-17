@@ -1,3 +1,4 @@
+import { readAgentResponse } from '../src/server/agent-progress-stream.ts';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
@@ -68,6 +69,7 @@ test('cloud Agent runtime serializes desktop access, isolates runtime credential
       "const configDelivered = input.modelConfig?.apiKey === modelKey && input.modelConfig?.baseUrl === 'https://api.example.test/v1' && input.modelConfig?.model === 'runtime-test-model';",
       "await appendFile(process.env.DOTS_TEST_MARKER, `start ${input.taskId} engine=${input.engine} config=${configDelivered} keyInEnv=${keyInEnv} dingtalkBridge=${Boolean(bridgeToken)} bridgeTokenInEnv=${bridgeTokenInEnv} calendarBridge=${Boolean(calendarToken)} calendarTokenInEnv=${calendarTokenInEnv}\\n`);",
       "await (await import('node:fs/promises')).writeFile('minesweeper.html', '<!doctype html><title>Minesweeper</title>');",
+      "if (input.streamProgress) { process.stdout.write(JSON.stringify({ type: 'progress', event: { id: 'tool:1', kind: 'tool', message: 'bash', detail: modelKey, state: 'running' } }) + '\\n'); await new Promise(resolve => setTimeout(resolve, 150)); process.stdout.write(JSON.stringify({ type: 'result', result: { status: 'done', message: 'streamed done' } }) + '\\n'); process.exit(0); }",
       "if (input.prompt === 'hold') await new Promise(resolve => setTimeout(resolve, 30000));",
       'await new Promise(resolve => setTimeout(resolve, 80));',
       "await appendFile(process.env.DOTS_TEST_MARKER, `end ${input.taskId}\\n`);",
@@ -116,6 +118,17 @@ test('cloud Agent runtime serializes desktop access, isolates runtime credential
       });
       return { status: response.status, body: await response.json() as { status?: string; message?: string; error?: string; diagnosticGrant?: string } };
     };
+
+    const streamedResponse = await fetch(`${runtimeUrl}/v1/tasks/run`, {
+      method: 'POST', headers: { authorization: 'Bearer agent-test-token-never-print', 'content-type': 'application/json', accept: 'application/x-ndjson' },
+      body: JSON.stringify({ engine: 'pi', taskId: '99999999-9999-4999-8999-999999999999', prompt: 'stream', cwd: 'tasks/99999999-9999-4999-8999-999999999999', modelConfig }),
+    });
+    const streamedEvents: unknown[] = [];
+    const streamedResult = await readAgentResponse(streamedResponse, event => streamedEvents.push(event));
+    assert.equal(streamedResult.message, 'streamed done');
+    assert.equal(streamedEvents.length, 1);
+    assert.doesNotMatch(JSON.stringify(streamedEvents), /cloud-runtime-model-key-never-print/);
+    await writeFile(markerPath, '');
 
     const missingConfig = await submit('44444444-4444-4444-8444-444444444444', 'missing config', null);
     assert.equal(missingConfig.status, 400);

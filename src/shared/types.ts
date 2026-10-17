@@ -8,6 +8,25 @@ export type TaskStatus = 'queued' | 'working' | 'delegating' | 'waiting' | 'sche
 export type ActionRuleMode = 'without-asking' | 'when-requested' | 'ask-before' | 'hand-off';
 export type { ScheduleSpec } from './scheduling.ts';
 
+export interface TokenUsage { input: number; output: number; cacheRead: number; cacheWrite: number; total: number }
+export interface AgentProgress {
+  id: string;
+  kind: 'status' | 'tool' | 'usage' | 'commentary';
+  message: string;
+  detail?: string;
+  state?: 'running' | 'done' | 'failed' | 'interrupted';
+  usage?: TokenUsage;
+}
+export interface TaskExecution {
+  runId: string;
+  startedAt: string;
+  finishedAt?: string;
+  events: (AgentProgress & { at: string })[];
+  usage?: TokenUsage;
+  totalUsage?: TokenUsage;
+  runs: number;
+}
+
 export interface DotAppearance {
   shape: string;
   color: string;
@@ -24,6 +43,7 @@ export interface Task {
   parentTaskId: string | null;
   engine: TaskEngine;
   agentSessionId: string | null;
+  execution?: TaskExecution;
   title: string;
   instruction: string;
   status: TaskStatus;

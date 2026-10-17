@@ -1,0 +1,27 @@
+.task-progress{width:100%;box-sizing:border-box;margin:10px 0 18px;padding:14px 16px;border:1px solid #dedee3;border-radius:14px;background:#fafafa;font-size:13px;color:#555563;min-width:0}
+.task-progress header{display:flex;gap:9px;align-items:center;min-width:0}
+.task-progress header strong{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0;color:#353540}
+.task-progress header button{border:0;background:transparent;color:inherit;cursor:pointer;flex-shrink:0;padding:5px}
+.task-progress-state{display:flex;gap:8px;align-items:center;margin-top:12px;min-width:0}
+.task-progress-state>span:nth-child(2){overflow-wrap:anywhere;flex:1}
+.task-progress-state time{white-space:nowrap;color:#777781;font-variant-numeric:tabular-nums}
+.task-progress-pulse{color:#557ac5;animation:task-progress-pulse 1.5s ease-in-out infinite}
+.task-progress summary{cursor:pointer;padding:7px 0}
+.task-progress-events{margin-top:5px}
+.task-progress ol{list-style:none;margin:3px 0;padding:0}
+.task-progress li{border-left:2px solid #dadde4;padding:6px 0 8px 12px;margin:0 0 5px}
+.task-progress li>div{display:flex;gap:9px;align-items:baseline;overflow-wrap:anywhere}
+.task-progress li>div>span{font-size:11px;white-space:nowrap;color:#747484}
+.task-progress li[data-state=failed]{border-left-color:#c04b4b}
+.task-progress pre{font:12px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;max-height:240px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:#eeeef2;border-radius:7px;padding:10px;margin:0}
+.task-progress footer{display:flex;flex-wrap:wrap;gap:4px 12px;border-top:1px solid #e6e6eb;padding-top:10px;margin-top:10px;font-size:11px;color:#72727d}
+.task-progress-error{color:#b33f46;white-space:pre-wrap;overflow-wrap:anywhere}
+.dots-dark .task-progress{background:#202024;border-color:#393940;color:#c3c3cd}
+.dots-dark .task-progress header strong{color:#ededf4}
+.dots-dark .task-progress pre{background:#17171b}
+.dots-dark .task-progress footer{border-color:#36363d;color:#a1a1ae}
+@keyframes task-progress-pulse{50%{opacity:.35}}
+@media(prefers-reduced-motion:reduce){.task-progress-pulse{animation:none}}
+@media(max-width:620px){.task-progress{padding:11px}.task-progress header{gap:6px}.task-progress header strong{font-size:12px}}
+
+.task-progress-badge{padding:3px 7px;border-radius:6px;background:#e9eaf0;font-size:11px;white-space:nowrap;color:#555c73}.dots-dark .task-progress-badge{background:#383a45;color:#ccd0df}

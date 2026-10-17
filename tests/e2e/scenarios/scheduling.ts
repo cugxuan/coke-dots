@@ -101,7 +101,7 @@ export async function recurringWork(ctx: UiScenarioContext) {
   await ctx.alphaPage!.getByTestId('task-composer').fill(instruction);
   await ctx.alphaPage!.locator('button.send').click();
   await ctx.alphaPage!.locator('.timeline .message.dot p').filter({ hasText: 'The recurring check completed.' }).waitFor({ state: 'visible', timeout: 15_000 });
-  await ctx.alphaPage!.locator('.timeline .pill.scheduled').waitFor({ state: 'visible', timeout: 15_000 });
+  await ctx.alphaPage!.locator('.task-progress').filter({ hasText: instruction }).locator('.task-progress-badge.scheduled').waitFor({ state: 'visible', timeout: 15_000 });
   await ctx.waitFor(() => promptCount() === initialCount + 1, 15_000);
   await ctx.screenshot(ctx.alphaPage!, '07d-recurring-run-completed');
 

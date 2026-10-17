@@ -1,3 +1,4 @@
+import type { AgentProgress } from '../shared/types.ts';
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium, type BrowserContext, type Page } from 'playwright-core';
@@ -28,7 +29,7 @@ export interface ComputerRuntime {
   listTaskArtifacts?(taskId: string): Promise<TaskArtifact[]>;
   readTaskArtifact?(taskId: string, artifactPath: string): Promise<{ bytes: Buffer; mediaType: string; name: string; previewable: boolean }>;
   openTaskArtifact?(taskId: string, artifactPath: string): Promise<ComputerState>;
-  runAgentTask?(input: { engine: string; taskId: string; prompt: string; sessionId: string | null; modelConfig?: { apiKey: string; baseUrl: string; model: string }; dingtalkDocumentsBridge?: { url: string; token: string; actions: Array<'search' | 'fetch' | 'create'> }; dingtalkCalendarBridge?: { url: string; token: string; actions: Array<'list'> }; incidentRemediation?: boolean; signal?: AbortSignal }): Promise<{ status: string; message: string; nextMinutes?: number; sessionId?: string; pageAction?: unknown; delegations?: unknown[]; pausedForControl?: boolean }>;
+  runAgentTask?(input: { engine: string; taskId: string; prompt: string; sessionId: string | null; modelConfig?: { apiKey: string; baseUrl: string; model: string }; dingtalkDocumentsBridge?: { url: string; token: string; actions: Array<'search' | 'fetch' | 'create'> }; dingtalkCalendarBridge?: { url: string; token: string; actions: Array<'list'> }; incidentRemediation?: boolean; onProgress?: (event: AgentProgress) => void; signal?: AbortSignal }): Promise<{ status: string; message: string; nextMinutes?: number; sessionId?: string; pageAction?: unknown; delegations?: unknown[]; pausedForControl?: boolean }>;
 }
 
 export class ComputerManager implements ComputerRuntime {

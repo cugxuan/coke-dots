@@ -2,6 +2,8 @@ import { spawn } from 'node:child_process';
 import { chmod, mkdir, realpath } from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
+import { StringDecoder } from 'node:string_decoder';
+import { normalizeProgress, progressText } from './agent-progress.mjs';
 
 const token = String(process.env.DOTS_AGENT_RUNTIME_TOKEN || '');
 const port = Number(process.env.DOTS_AGENT_RUNTIME_PORT || 8083);
@@ -116,10 +118,10 @@ function redactSecret(value, secret) {
   return value;
 }
 
-function runKernel(input, requestSignal) {
+function runKernel(input, requestSignal, onProgress) {
   return new Promise((resolve, reject) => {
     if (requestSignal?.aborted) return reject(new Error('Agent task was cancelled'));
-    const entry = { input, requestSignal, resolve, reject, onAbort: null };
+    const entry = { input, requestSignal, onProgress, resolve, reject, onAbort: null };
     entry.onAbort = () => {
       const index = queue.indexOf(entry);
       if (index < 0) return;
@@ -137,7 +139,7 @@ async function drainQueue() {
   const entry = queue.shift();
   const slot = { taskId: String(entry.input.taskId || ''), child: null, abort: null, interruptedByUser: false };
   active = slot;
-  try { entry.resolve(await executeKernel(entry.input, entry.requestSignal, slot)); }
+  try { entry.resolve(await executeKernel(entry.input, entry.requestSignal, slot, entry.onProgress)); }
   catch (error) { entry.reject(error); }
   finally {
     entry.requestSignal?.removeEventListener('abort', entry.onAbort);
@@ -146,7 +148,7 @@ async function drainQueue() {
   }
 }
 
-async function executeKernel(input, requestSignal, slot) {
+async function executeKernel(input, requestSignal, slot, onProgress) {
   const engine = String(input.engine || '');
   if (!allowedEngines.has(engine)) throw new Error(`Agent kernel '${engine}' is not enabled for this workspace`);
   if (!['pi', 'dsh'].includes(engine)) throw new Error(`Agent kernel '${engine}' needs an installed adapter`);
@@ -179,12 +181,35 @@ async function executeKernel(input, requestSignal, slot) {
   slot.child = child;
   slot.abort = abort;
   let stdout = '';
-  child.stdout.on('data', chunk => { stdout = (stdout + chunk.toString()).slice(-500_000); });
+  let pending = '';
+  let streamedResult;
+  let invalidStream = false;
+  const decoder = new StringDecoder('utf8');
+  const secrets = [modelConfig.apiKey, dingtalkDocumentsBridge?.token, dingtalkCalendarBridge?.token, token, process.env.LINUX_DESKTOP_WORKER_TOKEN].filter(Boolean);
+  child.stdout.on('data', chunk => {
+    const text = decoder.write(chunk);
+    stdout = (stdout + text).slice(-500_000);
+    if (!onProgress) return;
+    pending += text;
+    if (pending.length > 512_000) { invalidStream = true; child.kill('SIGTERM'); return; }
+    let end;
+    while ((end = pending.indexOf('\n')) >= 0) {
+      const line = pending.slice(0, end); pending = pending.slice(end + 1);
+      try {
+        const frame = JSON.parse(line);
+        if (frame.type === 'progress') {
+          const event = normalizeProgress(frame.event, secrets);
+          if (event) onProgress(event);
+        } else if (frame.type === 'result') streamedResult = frame.result;
+      } catch { /* Legacy adapters can return formatted JSON; parse it after exit. */ }
+    }
+  });
   child.stderr.on('data', () => undefined);
   child.stdin.end(JSON.stringify({
     engine, prompt, cwd, workspace, taskId,
     sessionId: typeof input.sessionId === 'string' ? input.sessionId : null,
     modelConfig,
+    streamProgress: Boolean(onProgress),
     computer: {
       baseUrl: `http://127.0.0.1:${workerPort}`,
       workerToken: process.env.LINUX_DESKTOP_WORKER_TOKEN,
@@ -205,10 +230,11 @@ async function executeKernel(input, requestSignal, slot) {
     });
     if (requestSignal?.aborted) throw new Error('Agent task was cancelled');
     if (slot.interruptedByUser) return { taskId, status: 'waiting', pausedForControl: true, message: '我已暂停当前操作，因为你正在接管电脑。交还电脑后，请告诉我继续。', engine, sessionId: typeof input.sessionId === 'string' ? input.sessionId : null };
+    if (invalidStream) throw new Error('Agent progress frame exceeded its size limit');
     if (code !== 0) throw new Error(`Agent adapter exited with code ${code}`);
     let result;
     try {
-      result = redactSecret(JSON.parse(stdout), modelConfig.apiKey);
+      result = redactSecret(streamedResult || JSON.parse(stdout), modelConfig.apiKey);
       if (dingtalkDocumentsBridge) result = redactSecret(result, dingtalkDocumentsBridge.token);
       if (dingtalkCalendarBridge) result = redactSecret(result, dingtalkCalendarBridge.token);
     } catch { throw new Error('Agent adapter must return a JSON decision'); }
@@ -252,7 +278,22 @@ http.createServer(async (req, res) => {
     if (req.method === 'POST' && pathname === '/v1/tasks/run') {
       const requestAbort = new AbortController();
       res.once('close', () => { if (!res.writableEnded) requestAbort.abort(); });
-      try { return send(res, 200, await runKernel(await readJson(req), requestAbort.signal)); }
+      const input = await readJson(req);
+      if (req.headers.accept === 'application/x-ndjson') {
+        res.writeHead(200, { 'content-type': 'application/x-ndjson; charset=utf-8', 'cache-control': 'no-store, no-transform', 'x-accel-buffering': 'no' });
+        res.flushHeaders();
+        const write = frame => {
+          if (res.destroyed) return;
+          if (res.writableLength > 512_000) { requestAbort.abort(); res.destroy(); return; }
+          res.write(`${JSON.stringify(frame)}\n`);
+        };
+        const heartbeat = setInterval(() => { if (!res.destroyed) res.write('\n'); }, 15_000);
+        try { write({ type: 'result', result: await runKernel(input, requestAbort.signal, event => write({ type: 'progress', event })) }); }
+        catch (error) { write({ type: 'error', error: progressText(error instanceof Error ? error.message : 'Agent task failed', [input.modelConfig?.apiKey, input.dingtalkDocumentsBridge?.token, input.dingtalkCalendarBridge?.token].filter(Boolean), 500) }); }
+        finally { clearInterval(heartbeat); res.end(); }
+        return;
+      }
+      try { return send(res, 200, await runKernel(input, requestAbort.signal)); }
       catch (error) { return send(res, 400, { error: error instanceof Error ? error.message.slice(0, 500) : 'Agent task failed' }); }
     }
     if (req.method === 'POST' && pathname === '/v1/tasks/pause') { pauseActive(); return send(res, 200, { paused: Boolean(active?.child) }); }

@@ -7,6 +7,8 @@ import { describeSchedule, scheduleForTask } from '../shared/scheduling.ts';
 import { initializeStoreSchema } from './store-schema.ts';
 import { toTask, toEntry, toWatch } from './store-rows.ts';
 import { dingtalkIncidentProfile, dingtalkAlertInstruction } from './incident-profiles/coke-agent.ts';
+import type { AgentProgress, TaskExecution, TokenUsage } from '../shared/types.ts';
+import { normalizeProgress } from '../../deploy/linux-desktop/agent-progress.mjs';
 
 export { cokeAgentIncidentTraceId } from './incident-profiles/coke-agent.ts';
 
@@ -1026,6 +1028,46 @@ export class Store {
       this.db.exec('COMMIT');
       return this.getTask(id, tenantId);
     } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+  }
+
+  beginTaskExecution(taskId: string, tenantId: string): string {
+    const task = this.getTask(taskId, tenantId);
+    if (!task || task.status !== 'working') throw new Error('无法开始这个任务的执行记录');
+    const now = new Date().toISOString();
+    const execution: TaskExecution = { runId: randomUUID(), startedAt: now, runs: (task.execution?.runs || 0) + 1,
+      events: [{ id: 'phase', kind: 'status', message: '正在准备任务…', state: 'running', at: now }],
+      ...(task.execution?.totalUsage ? { totalUsage: task.execution.totalUsage } : {}) };
+    this.db.prepare('UPDATE tasks SET execution_json=? WHERE id=? AND tenant_id=?').run(JSON.stringify(execution), taskId, tenantId);
+    return execution.runId;
+  }
+
+  recordTaskProgress(taskId: string, tenantId: string, runId: string, input: AgentProgress): boolean {
+    const task = this.getTask(taskId, tenantId);
+    const execution = task?.execution;
+    const event = normalizeProgress(input);
+    if (!event || task?.status !== 'working' || !execution || execution.runId !== runId || execution.finishedAt) return false;
+    if (event.kind === 'usage' && event.usage) {
+      const keys: (keyof TokenUsage)[] = ['input', 'output', 'cacheRead', 'cacheWrite', 'total'];
+      if (keys.some(key => event.usage![key] < (execution.usage?.[key] || 0))) return false;
+      execution.totalUsage = Object.fromEntries(keys.map(key => [key, (execution.totalUsage?.[key] || 0) - (execution.usage?.[key] || 0) + event.usage![key]])) as unknown as TokenUsage;
+      execution.usage = event.usage;
+    } else {
+      const previous = execution.events.find(item => item.id === event.id);
+      const next = { ...event, at: previous?.at || new Date().toISOString() };
+      execution.events = execution.events.filter(item => item.id !== event.id);
+      execution.events.push(next);
+      execution.events = execution.events.slice(-50);
+    }
+    this.db.prepare('UPDATE tasks SET execution_json=? WHERE id=? AND tenant_id=?').run(JSON.stringify(execution), taskId, tenantId);
+    return true;
+  }
+
+  finishTaskExecution(taskId: string, tenantId: string, runId: string) {
+    const execution = this.getTask(taskId, tenantId)?.execution;
+    if (!execution || execution.runId !== runId || execution.finishedAt) return;
+    execution.finishedAt = new Date().toISOString();
+    execution.events = execution.events.filter(event => event.kind !== 'status').map(event => event.state === 'running' ? { ...event, state: 'interrupted' } : event);
+    this.db.prepare('UPDATE tasks SET execution_json=? WHERE id=? AND tenant_id=?').run(JSON.stringify(execution), taskId, tenantId);
   }
 
   addEntry(kind: Entry['kind'], body: string, taskId: string | null = null, tenantId = 'legacy', attachmentIds: string[] = []): Entry {
