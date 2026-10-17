@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+const input = JSON.parse(readFileSync(0, 'utf8'));
+assert.equal(input.engine, 'pi');
+assert.equal(input.modelConfig.apiKey, 'ssh-docker-local-model-test-key');
+assert.equal(Object.values(process.env).includes(input.modelConfig.apiKey), false);
+assert.equal(process.env.DOTS_AGENT_RUNTIME_TOKEN, undefined);
+assert.equal(process.env.SSH_AUTH_SOCK, undefined);
+assert.equal(input.cwd, '/workspace/tasks/' + input.taskId);
+const previous = existsSync('marker.txt') ? readFileSync('marker.txt', 'utf8') : '';
+const run = previous ? Number(previous.match(/run (\d+)/)[1]) + 1 : 1;
+assert.equal(input.sessionId, run === 1 ? null : 'fixture-' + input.taskId);
+writeFileSync('marker.txt', 'Persisted by the real Agent runtime for ' + input.taskId + '; run ' + run);
+console.log(JSON.stringify({ status: 'done', message: 'SSH Docker Agent fixture completed', sessionId: 'fixture-' + input.taskId }));

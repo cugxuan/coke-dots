@@ -293,7 +293,9 @@ function App() {
     const keepRootDotConversation = voiceCallOpen && view === 'chat' && selected === null;
     if (state.remoteEngines.includes(engine) && !state.availableEngines.includes(engine)) {
       setError(state.modelSettings.apiKeyStatus === 'unavailable'
-        ? '无法读取实例共享 API 密钥。请检查 K3D 集群连接及 coke-dots-system/shared-model-api Secret 权限后重试。'
+        ? state.modelSettings.secretBackend === 'file'
+          ? '无法读取实例共享 API 密钥。请检查服务器密钥文件的归属及访问权限后重试。'
+          : '无法读取实例共享 API 密钥。请检查 K3D 集群连接及 coke-dots-system/shared-model-api Secret 权限后重试。'
         : '所选云电脑 Agent 未配置实例共享模型 API，请先完成配置后再提交。');
       return;
     }
@@ -869,7 +871,7 @@ function Profile({ state, auth, onError, onEditAppearance, onManageComputerAcces
         <label>API 地址<input aria-label="共享模型 API 地址" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} /></label>
         <label>模型名称<input aria-label="共享模型名称" value={model} onChange={e => setModel(e.target.value)} /></label>
         <label>API 密钥<input aria-label="共享模型 API 密钥" type="password" autoComplete="off" placeholder={state.modelSettings.hasKey ? '已保存；留空则保持不变' : '输入密钥'} value={apiKey} onChange={e => setApiKey(e.target.value)} /></label>
-        <small>{state.modelSettings.adminTenantId ? '此配置由模型管理员工作区维护；API Key 保存在实例级 K3D Secret。' : '保存后，当前工作区将成为共享模型配置管理员。API Key 保存在实例级 K3D Secret。'}</small>
+        <small>{state.modelSettings.adminTenantId ? '此配置由模型管理员工作区维护。' : '保存后，当前工作区将成为共享模型配置管理员。'}API Key 由服务器保存，不会提供给浏览器或写入工作区文件。</small>
         <button className="primary" onClick={async () => { try { await request('/model-settings', 'PATCH', { baseUrl, model, apiKey }); setApiKey(''); } catch (e) { onError(String(e)); } }}>保存共享模型设置</button>
       </> : <div data-testid="shared-model-settings-readonly">
         <p>API 地址：{state.modelSettings.baseUrl || '未配置'}</p>

@@ -95,7 +95,7 @@ test('worker dispatches Pi to the cloud kernel when Pi is enabled by the default
     async runAgentTask(input: { modelConfig?: { model: string } }) {
       dispatches += 1;
       receivedModel = input.modelConfig?.model || '';
-      return { status: 'done', message: 'Cloud Pi task completed.' };
+      return { status: 'done', message: 'Cloud Pi task completed.', sessionId: 'cloud-pi-session' };
     },
   } as unknown as ComputerRuntime;
   const worker = new Worker(store, () => {}, join(directory, 'workspaces'), async () => {}, () => computer);
@@ -110,6 +110,7 @@ test('worker dispatches Pi to the cloud kernel when Pi is enabled by the default
     assert.equal(receivedModel, 'cloud-default-pi-model', 'The configured shared model profile must be sent to the cloud Pi runtime');
     assert.equal(store.getTask(task.id, account.tenant.id)?.status, 'done');
     assert.equal(store.getTask(task.id, account.tenant.id)?.result, 'Cloud Pi task completed.');
+    assert.equal(store.getTask(task.id, account.tenant.id)?.agentSessionId, 'cloud-pi-session');
   } finally {
     worker.stop();
     store.close();

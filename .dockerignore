@@ -1,0 +1,10 @@
+**
+!package.json
+!package-lock.json
+!deploy/
+!deploy/linux-desktop/
+!deploy/linux-desktop/**
+!deploy/dingtalk-connector/
+!deploy/dingtalk-connector/**
+**/.env*
+**/*.secret

@@ -6,6 +6,9 @@ import type { TaskArtifact } from '../shared/types.ts';
 import { ComputerControlOwnedByUserError, LinuxDesktopWorkerError } from './computer-errors.ts';
 import { desktopAgentKernels } from './desktop-agent-kernels.ts';
 import { LocalDesktopProxyBridge, resolveDesktopProxyConfig } from './local-desktop-proxy-bridge.ts';
+import { configuredDesktopImage } from './desktop-runtime-config.ts';
+import { SshDockerDesktopConnector } from './ssh-docker-desktop.ts';
+export { configuredDesktopImage, isPinnedDesktopImageReference } from './desktop-runtime-config.ts';
 
 const workerPort = 8082;
 const vncPort = 6080;
@@ -25,8 +28,8 @@ export interface DesktopConnector {
 }
 
 /**
- * K3D/Kubernetes backed desktop. Each workspace receives its own namespace,
- * Secret, Deployment, Service and PVC. Browser and agent commands stay behind
+ * Debian desktop via Kubernetes or SSH/Docker. Each workspace receives isolated
+ * runtime and storage resources. Browser and agent commands stay behind
  * the authenticated Coke Dots API; only the browser view is proxied to users.
  */
 export class LinuxDesktopComputer implements ComputerRuntime {
@@ -250,7 +253,7 @@ export class LinuxDesktopComputer implements ComputerRuntime {
           changed = await this.connector.reconcile!(this.tenantId);
           this.lastReconciledAt = Date.now();
         } catch {
-          // A transient kubectl error must not make an otherwise healthy cached
+          // A transient provisioning error must not make an otherwise healthy cached
           // desktop unavailable. Back off briefly, then reconcile again.
           this.lastReconciledAt = Date.now() - this.reconcileIntervalMs + 15_000;
           const identity = desktopResourceIdentity(this.tenantId);
@@ -303,6 +306,7 @@ function endpointUrl(baseValue: URL, path: string) {
 }
 
 function defaultDesktopConnector(): DesktopConnector {
+  if (process.env.DOTS_COMPUTER_BACKEND === 'ssh-docker') return new SshDockerDesktopConnector();
   if (process.env.NODE_ENV === 'test' && process.env.DOTS_LINUX_DESKTOP_TEST_WORKER_URL && process.env.DOTS_LINUX_DESKTOP_TEST_NOVNC_URL && process.env.DOTS_LINUX_DESKTOP_TEST_AGENT_URL) {
     const signingKey = process.env.DOTS_LINUX_DESKTOP_TOKEN_SECRET || 'coke-dots-test-desktop-signing-key';
     return {
@@ -330,28 +334,6 @@ export function desktopResourceIdentity(tenantId: string) {
   const slug = tenantId.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 20) || 'workspace';
   const namespace = `dots-coke-dots-${slug}-${suffix}`.slice(0, 63).replace(/-+$/g, '');
   return { namespace, tenantHash };
-}
-
-export function isPinnedDesktopImageReference(reference: string) {
-  const value = reference.trim();
-  if (!value || /\s/.test(value)) return false;
-  const digestSeparator = value.lastIndexOf('@');
-  if (digestSeparator >= 0) {
-    const imageName = value.slice(0, digestSeparator);
-    return Boolean(imageName) && /^sha256:[a-f0-9]{64}$/i.test(value.slice(digestSeparator + 1));
-  }
-  const lastSlash = value.lastIndexOf('/');
-  const lastColon = value.lastIndexOf(':');
-  const tag = lastColon > lastSlash ? value.slice(lastColon + 1) : '';
-  return /^sha-[a-f0-9]{40}$/i.test(tag);
-}
-
-export function configuredDesktopImage(environment = process.env.NODE_ENV, configured = process.env.DOTS_LINUX_DESKTOP_IMAGE) {
-  const image = configured?.trim() || 'coke-dots-linux-desktop:dev';
-  if (environment === 'production' && !isPinnedDesktopImageReference(image)) {
-    throw new Error('生产环境的 Linux 云电脑必须配置固定镜像摘要，或使用 coke-dots-linux-desktop:sha-<40位Git提交>');
-  }
-  return image;
 }
 
 export function desktopResources(tenantId: string, workerToken: string, agentToken: string) {

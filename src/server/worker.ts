@@ -7,7 +7,8 @@ import { adapters, formatAgentPrompt, parseDecision, type AgentRequest, type Eng
 import type { ComputerRuntime } from './computer.ts';
 import { ComputerControlOwnedByUserError } from './computer-errors.ts';
 import { desktopAgentEngineIds } from './desktop-agent-kernels.ts';
-import { effectiveModelConfig, loadModelSettings, sharedModelApiKeyStatus } from './model-settings.ts';
+import { effectiveModelConfig, loadModelSettings, sharedModelApiKeyStatus, modelSecretBackend } from './model-settings.ts';
+import { usesCloudComputer } from './desktop-runtime-config.ts';
 import { sendDesktopNotification, type DesktopNotifier } from './notifications.ts';
 import type { DingTalkService } from './dingtalk.ts';
 
@@ -67,12 +68,14 @@ export class Worker {
     const adapter = adapters[task.engine];
     const computer = this.computerFor?.(task.tenantId);
     const remoteEngines: Engine[] = desktopAgentEngineIds();
-    const requiresDesktopRuntime = Boolean(computer?.runAgentTask && process.env.DOTS_COMPUTER_BACKEND === 'linux-desktop' && remoteEngines.includes(task.engine));
+    const requiresDesktopRuntime = Boolean(computer?.runAgentTask && usesCloudComputer() && remoteEngines.includes(task.engine));
     const modelConfig = requiresDesktopRuntime ? effectiveModelConfig(task.tenantId) : null;
     const useDesktopRuntime = requiresDesktopRuntime && Boolean(modelConfig);
     if (requiresDesktopRuntime && !modelConfig) {
       const reason = sharedModelApiKeyStatus() === 'unavailable'
-        ? '无法读取 Coke Dots 实例共享 API 密钥。请检查 K3D 集群连接及 coke-dots-system/shared-model-api Secret 权限后重试。'
+        ? modelSecretBackend() === 'file'
+          ? '无法读取 Coke Dots 实例共享 API 密钥。请检查服务器密钥文件的归属及访问权限后重试。'
+          : '无法读取 Coke Dots 实例共享 API 密钥。请检查 K3D 集群连接及 coke-dots-system/shared-model-api Secret 权限后重试。'
         : 'Coke Dots 实例尚未配置共享模型 API。请由实例模型管理员完成配置后重试。';
       const message = `云电脑内的 ${task.engine} Agent 没有收到模型配置，任务没有执行。${reason}`;
       this.store.updateTask(task.id, { status: 'failed', error: message }, task.tenantId);
@@ -125,8 +128,11 @@ export class Worker {
       const dingtalkCalendarBridge = useDesktopRuntime && taskOwnerUserId && !task.parentTaskId
         ? this.dingtalk?.agentCalendarBridge(task.tenantId, taskOwnerUserId, task.id, task.instruction) || undefined
         : undefined;
-      const decision = useDesktopRuntime
-        ? parseDecision(JSON.stringify(await computer!.runAgentTask!({ engine: task.engine, taskId: task.id, prompt: formatAgentPrompt(input), sessionId: task.agentSessionId, modelConfig: modelConfig || undefined, ...(dingtalkDocumentsBridge ? { dingtalkDocumentsBridge } : {}), ...(dingtalkCalendarBridge ? { dingtalkCalendarBridge } : {}), ...(incidentRemediation ? { incidentRemediation: true } : {}), signal })), task.agentSessionId || undefined, { allowDelegation: input.allowDelegation, availableEngines, allowDotMemoryUpdates, dotMemoryIds: dotMemories.map(memory => memory.id) })
+      const desktopResult = useDesktopRuntime
+        ? await computer!.runAgentTask!({ engine: task.engine, taskId: task.id, prompt: formatAgentPrompt(input), sessionId: task.agentSessionId, modelConfig: modelConfig || undefined, ...(dingtalkDocumentsBridge ? { dingtalkDocumentsBridge } : {}), ...(dingtalkCalendarBridge ? { dingtalkCalendarBridge } : {}), ...(incidentRemediation ? { incidentRemediation: true } : {}), signal })
+        : null;
+      const decision = desktopResult
+        ? parseDecision(JSON.stringify(desktopResult), desktopResult.sessionId || task.agentSessionId || undefined, { allowDelegation: input.allowDelegation, availableEngines, allowDotMemoryUpdates, dotMemoryIds: dotMemories.map(memory => memory.id) })
         : await adapter.run(input);
       const current = this.store.getTask(task.id, task.tenantId);
       if (!current || current.status !== 'working') return;

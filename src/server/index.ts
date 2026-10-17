@@ -9,7 +9,7 @@ import { desktopAgentEngineIds } from './desktop-agent-kernels.ts';
 import { isEngine, type ActionRuleMode, type DotAppearance, type Engine, type ScheduleSpec } from '../shared/types.ts';
 import { isDotAppearance } from '../shared/avatar.ts';
 import { nextScheduleOccurrence, scheduleForTask, validateScheduleSpec } from '../shared/scheduling.ts';
-import { effectiveModelConfig, loadModelSettings, publicModelSettings, saveModelKey, setModelMetadata } from './model-settings.ts';
+import { effectiveModelConfig, loadModelSettings, modelSecretBackend, publicModelSettings, saveModelKey, setModelMetadata } from './model-settings.ts';
 import { ComputerManager, type ComputerRuntime } from './computer.ts';
 import { LinuxDesktopComputer } from './linux-desktop-computer.ts';
 import { apiErrorResponse } from './computer-errors.ts';
@@ -26,9 +26,11 @@ import type { Duplex } from 'node:stream';
 import { WebSocketServer } from 'ws';
 import { bridgeVolcengineVoiceCall } from './volcengine-voice-gateway.ts';
 import { isAllowedOrigin, isLocalRequest } from './request-boundary.ts';
+import { usesCloudComputer } from './desktop-runtime-config.ts';
 
 const envFile = resolve(process.env.DOTS_ENV_FILE || '.env');
 if (existsSync(envFile)) process.loadEnvFile(envFile);
+modelSecretBackend(); // Reject a misspelled credential backend before accepting requests.
 
 const port = Number(process.env.DOTS_PORT || 4317);
 const host = '127.0.0.1';
@@ -58,7 +60,7 @@ const novncStreams = new Map<string, Set<Duplex>>();
 const clients = new Map<ServerResponse, string>();
 const volcVoiceWss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024, perMessageDeflate: false });
 const configuredDesktopEngines = () => {
-  if (process.env.DOTS_COMPUTER_BACKEND !== 'linux-desktop') return [] as Engine[];
+  if (!usesCloudComputer()) return [] as Engine[];
   return desktopAgentEngineIds();
 };
 const availableFor = (tenantId: string) => [...new Set([...(Object.keys(adapters) as Engine[]).filter(id => adapters[id].available(tenantId)), ...(effectiveModelConfig(tenantId) ? configuredDesktopEngines() : [])])];
@@ -73,7 +75,7 @@ function snapshot(tenantId: string) {
 function computerFor(tenantId: string): ComputerRuntime {
   let computer = computers.get(tenantId);
   if (!computer) {
-    computer = process.env.DOTS_COMPUTER_BACKEND === 'linux-desktop'
+    computer = usesCloudComputer()
       ? new LinuxDesktopComputer(tenantId)
       : new ComputerManager(join(dataDirectory, 'tenants', tenantId, 'computer'));
     computers.set(tenantId, computer);
@@ -610,7 +612,7 @@ const server = createServer(async (req, res) => {
       return reply(res, 200, { ok: true });
     }
 
-    if (process.env.DOTS_COMPUTER_BACKEND !== 'linux-desktop' && (path === '/api/computer' || path.startsWith('/api/computer/')) && store.getSetting('localComputerEnabled', session.tenant.id) === 'false') {
+    if (!usesCloudComputer() && (path === '/api/computer' || path.startsWith('/api/computer/')) && store.getSetting('localComputerEnabled', session.tenant.id) === 'false') {
       return reply(res, 403, { error: '当前工作区尚未授权 Dot 使用本机 Chrome 工作区' });
     }
     const computer = computerFor(session.tenant.id);
@@ -1006,7 +1008,7 @@ server.on('upgrade', (req, client, head) => {
       const prefix = '/api/computer/novnc/';
       if (!path.startsWith(prefix) || !isLocalRequest(req, path, requestBoundary) || !isAllowedOrigin(req.headers.origin || '', requestBoundary)) return client.destroy();
       const session = auth.session(req);
-      if (!session || (process.env.DOTS_COMPUTER_BACKEND !== 'linux-desktop' && store.getSetting('localComputerEnabled', session.tenant.id) === 'false')) return client.destroy();
+      if (!session || (!usesCloudComputer() && store.getSetting('localComputerEnabled', session.tenant.id) === 'false')) return client.destroy();
       const computer = computerFor(session.tenant.id);
       if (!computer.novncTarget || (await computer.state()).owner !== 'user') return client.destroy();
       const target = await computer.novncTarget();

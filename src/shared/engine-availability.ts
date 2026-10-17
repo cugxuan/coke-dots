@@ -5,9 +5,13 @@ export function engineAvailabilityHint(
   engine: Engine,
 ): string {
   const settings = state.modelSettings;
-  if (settings.apiKeyStatus === 'unavailable') return '无法读取实例共享 API 密钥。请检查 K3D 集群连接和 Secret 权限。';
+  if (settings.apiKeyStatus === 'unavailable') return settings.secretBackend === 'file'
+    ? '无法读取实例共享 API 密钥。请检查服务器密钥文件的归属及访问权限。'
+    : '无法读取实例共享 API 密钥。请检查 K3D 集群连接和 Secret 权限。';
   if (settings.apiKeyStatus === 'missing' || !settings.hasKey || !settings.baseUrl || !settings.model) {
-    return '实例共享模型 API 尚未完整配置。请检查模型地址、名称和 K3D Secret。';
+    return settings.secretBackend === 'file'
+      ? '实例共享模型 API 尚未完整配置。请保存模型地址、名称和 API 密钥。'
+      : '实例共享模型 API 尚未完整配置。请检查模型地址、名称和 K3D Secret。';
   }
   if (state.availableEngines.includes(engine)) {
     return state.remoteEngines.includes(engine) ? '任务由 Dot 的云电脑运行。' : '任务由本机后台处理。';

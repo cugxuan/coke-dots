@@ -2,6 +2,8 @@
 
 This is an additive computer backend for Coke Dots. It provisions one Debian desktop namespace, Deployment, Service, Secret, and persistent workspace volume for each Dots workspace. The existing local-browser backend remains available by default.
 
+For a Debian host without Kubernetes, see [SSH Docker single-host deployment](debian-ssh-docker.md). That mode reuses this desktop image and Agent protocol through a separate connector. This document describes the unchanged `linux-desktop` Kubernetes mode.
+
 ## Debian evidence
 
 OpenAI's [computer and apps documentation](https://learn.chatgpt.com/docs/dots/computers-and-apps) confirms that Dots has a persistent cloud computer and browser and supports taking over and returning control. OpenAI does not identify the Linux distribution. A user report in the [OpenAI Developer Community](https://community.openai.com/t/docker-container-support-for-dots-working-in-the-cloud-computers/1402440) describes a Dots cloud environment running Debian 13 x64; [Tom's Hardware](https://www.tomshardware.com/tech-industry/artificial-intelligence/geekbench-7-results-suggest-openais-dots-agent-runs-on-nine-core-amd-epyc-vms-with-nearly-10gb-of-memory-newest-runs-score-about-six-times-meta-muse-in-multi-core) also reports Debian in post-launch benchmark runs and Ubuntu in a pre-launch run. Coke Dots uses Debian 13 Trixie as an evidence-based prototype choice, not as an officially confirmed OpenAI implementation detail.

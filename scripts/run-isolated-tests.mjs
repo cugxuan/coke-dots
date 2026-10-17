@@ -11,6 +11,8 @@ const baseEnvironment = {
   ...process.env,
   NODE_ENV: 'test',
   DOTS_E2E_AUTH: '1',
+  DOTS_MODEL_SECRET_BACKEND: 'kubernetes',
+  DOTS_COMPUTER_BACKEND: '',
 };
 
 function createIsolatedEnvironment() {

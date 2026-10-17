@@ -13,3 +13,9 @@ test('engine status reports available local and remote execution paths', () => {
   assert.equal(engineAvailabilityHint({ modelSettings: configuredModel, availableEngines: ['pi'], remoteEngines: ['pi'] }, 'pi'), '任务由 Dot 的云电脑运行。');
   assert.equal(engineAvailabilityHint({ modelSettings: configuredModel, availableEngines: ['pi'], remoteEngines: [] }, 'pi'), '任务由本机后台处理。');
 });
+
+test('file-backed model errors do not instruct a single-host operator to configure Kubernetes', () => {
+  const hint = engineAvailabilityHint({ modelSettings: { ...configuredModel, secretBackend: 'file', apiKeyStatus: 'unavailable' }, availableEngines: [], remoteEngines: ['pi'] }, 'pi');
+  assert.match(hint, /密钥文件/);
+  assert.doesNotMatch(hint, /K3D|Kubernetes/);
+});

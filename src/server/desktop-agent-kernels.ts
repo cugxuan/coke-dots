@@ -1,3 +1,5 @@
+import { usesCloudComputer } from './desktop-runtime-config.ts';
+
 export type DesktopAgentEngine = 'pi' | 'dsh';
 
 export interface DesktopAgentKernel {
@@ -15,7 +17,7 @@ const supportedEngines = new Set<DesktopAgentEngine>(['pi', 'dsh']);
  * JSON object, including `{}`, remains the operator override.
  */
 export function desktopAgentKernels(environment: NodeJS.ProcessEnv = process.env): DesktopAgentKernels {
-  if (environment.DOTS_COMPUTER_BACKEND !== 'linux-desktop') return {};
+  if (!usesCloudComputer(environment)) return {};
 
   const configured = environment.DOTS_AGENT_KERNELS_JSON?.trim();
   if (configured) {
