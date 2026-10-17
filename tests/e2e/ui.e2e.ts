@@ -908,7 +908,7 @@ try {
 
   await recordStep('Beta personal computer remains isolated from Alpha shared computer', () => personalComputerIsolation(scenarioContext));
 
-  await recordStep('Computer user input stays disabled until explicit takeover', () => inputRequiresTakeover(scenarioContext));
+  await recordStep('Clicking the computer screen acquires control before sending input', () => inputRequiresTakeover(scenarioContext));
 
   await recordStep('Computer takeover performs real browser navigation, click, text input, and return', () => takeoverAndReturn(scenarioContext));
 

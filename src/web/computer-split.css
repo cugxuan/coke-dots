@@ -1,0 +1,65 @@
+.shell.computer-open-mode { height: 100vh; height: 100dvh; min-height: 0; overflow: hidden; }
+.computer-open-mode .main { min-height: 0; }
+.computer-open-mode .chat-layout { flex-direction: row; overflow: hidden; }
+.computer-open-mode .chat-layout > .chat-panel { flex: 0 0 40%; min-width: 0; min-height: 0; }
+@media (min-width: 701px) and (pointer: fine), (min-width: 1025px) {
+  .computer-open-mode.dot-chat-mode .composer-bottom { flex-basis: 100%; justify-content: flex-end; }
+}
+@media (min-width: 701px) and (max-width: 1100px) {
+  .computer-open-mode { --chat-gutter: 16px; }
+}
+.computer-split {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid #e9e6ed;
+  background: #f7f6f9;
+  color: #37323f;
+}
+.computer-pane-header { display: flex; align-items: center; justify-content: space-between; flex: none; gap: 16px; padding: 20px 24px; }
+.computer-pane-header > div { display: grid; gap: 7px; min-width: 0; }
+.computer-pane-header strong { font-size: 15px; font-weight: 600; }
+.computer-pane-header span { font-size: 12px; line-height: 1.5; color: #827b8c; }
+.computer-pane-header button { width: 30px; height: 30px; flex: none; border: 0; border-radius: 8px; background: transparent; color: inherit; font-size: 23px; cursor: pointer; }
+.computer-pane-header button:hover { background: #eae6ef; }
+.computer-split .computer-view { container-type: size; display: flex; align-items: center; padding: 0 24px 24px; overflow: hidden; }
+.computer-split .computer-workspace { width: 100%; gap: 12px; }
+.computer-split .computer-stage { width: 100%; min-width: 0; max-height: calc(100cqh - 64px); border: 1px solid #ded9e5; border-radius: 12px; box-shadow: 0 8px 30px #28203312; }
+.computer-split .computer-stage > img { cursor: pointer; }
+.computer-split .computer-controlbar { width: 100%; min-height: 42px; padding: 8px 12px; border-radius: 10px; gap: 12px; background: #efedf3; color: #686071; }
+.computer-split .computer-owner { font-size: 12px; }
+.computer-split .take-button { font-size: 12px; padding: 7px 12px; }
+.computer-split .computer-controlbar.is-user-control { background: #eee6fa; color: #68449b; }
+.computer-split .computer-controlbar.is-user-control .computer-owner i { background: #9164ce; }
+.computer-split .computer-controlbar.is-user-control .take-button { background: #dcd0ef; color: #563481; border-radius: 16px; }
+.computer-split .computer-controlbar.is-user-control .take-button:hover { background: #cfbde7; }
+.computer-split .computer-empty { margin: auto; padding: 40px 20px; }
+.computer-split img:focus-visible, .computer-pane-header button:focus-visible { outline: 2px solid #9b82c7; outline-offset: -3px; }
+.dots-dark .computer-split { border-color: #36313d; background: #232127; color: #e5dfec; }
+.dots-dark .computer-pane-header span { color: #a39aaa; }
+.dots-dark .computer-pane-header button:hover { background: #38313f; }
+.dots-dark .computer-split .computer-stage { border-color: #49424f; box-shadow: 0 12px 32px #0003; }
+.dots-dark .computer-split .computer-controlbar { background: #2d2933; color: #c0b8c9; }
+.dots-dark .computer-split .computer-controlbar.is-user-control { background: #3b2c4e; color: #dfc9fc; }
+.dots-dark .computer-split .computer-controlbar.is-user-control .take-button { background: #57416f; color: #f2e8ff; }
+.dots-dark .computer-split .computer-controlbar.is-user-control .take-button:hover { background: #674e83; }
+@media (max-width: 700px) {
+  .computer-open-mode .chat-layout { flex-direction: column; }
+  .computer-open-mode .chat-layout > .chat-panel { order: 2; flex: 1; min-height: 0; width: 100%; }
+  .computer-open-mode .computer-split { order: 1; flex: 0 0 45%; border-left: 0; border-bottom: 1px solid #e9e6ed; }
+  .computer-open-mode.dots-dark .computer-split { border-bottom-color: #36313d; }
+  .computer-pane-header { padding: 10px 14px; gap: 8px; }
+  .computer-pane-header > div { gap: 3px; }
+  .computer-pane-header strong { font-size: 13px; }
+  .computer-pane-header span { font-size: 10px; }
+  .computer-split .computer-view { padding: 0 12px 10px; }
+  .computer-split .computer-workspace { gap: 6px; }
+  .computer-split .computer-stage { max-height: calc(100cqh - 44px); border-radius: 8px; }
+  .computer-split .computer-controlbar { min-height: 32px; padding: 3px 8px; }
+  .computer-split .computer-owner, .computer-split .take-button { font-size: 11px; }
+  .computer-split .computer-empty { padding: 12px; }
+  .computer-split .computer-empty .computer-icon { display: none; }
+  .computer-split .computer-empty p { margin-bottom: 12px; }
+}

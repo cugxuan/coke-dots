@@ -27,7 +27,7 @@ const agentCalls: Record<string, unknown>[] = [];
 const takeoverInterruptedTasks = new Set<string>();
 const taskArtifacts = new Map<string, { path: string; name: string; mediaType: string; size: number; previewable: boolean }[]>();
 const taskArtifactBodies = new Map<string, Map<string, string>>();
-const browserActions: { hash: string; action: string }[] = [];
+const browserActions: { hash: string; action: string; owner: string; x?: number; y?: number }[] = [];
 const remoteHttpPaths: string[] = [];
 const remoteUpgradePaths: string[] = [];
 const browserWebSocketEvents: string[] = [];
@@ -95,7 +95,7 @@ async function startRemote() {
       const route = `/${pathParts.join('/')}`;
       const machine = ensureMachine(hash);
       if (service === 'novnc' && req.method === 'GET' && route === '/vnc_lite.html') {
-        const html = `<!doctype html><html><body><main id="mock-vnc" data-state="loading">Mock Debian VNC desktop</main><script>const ws=new WebSocket('ws://'+location.host+'/api/computer/novnc/websockify');ws.onopen=()=>document.querySelector('#mock-vnc').dataset.state='connected';ws.onerror=()=>document.querySelector('#mock-vnc').dataset.state='error';</script></body></html>`;
+        const html = `<!doctype html><html><body><main id="mock-vnc" data-state="loading">Mock Debian VNC desktop</main><script>const ws=new WebSocket('ws://'+location.host+'/api/computer/novnc/websockify');ws.onopen=()=>{document.querySelector('#mock-vnc').dataset.state='connected';setTimeout(()=>{const canvas=document.createElement('canvas');canvas.tabIndex=-1;canvas.dataset.keys='';canvas.onkeydown=event=>canvas.dataset.keys+=event.key;document.body.appendChild(canvas);},100);};ws.onerror=()=>document.querySelector('#mock-vnc').dataset.state='error';</script></body></html>`;
         return content(res, 200, 'text/html; charset=utf-8', html);
       }
       if (service === 'worker') {
@@ -122,7 +122,7 @@ async function startRemote() {
         }
         if (route === '/v1/commands' && req.method === 'POST') {
           const body = await readJson(req);
-          browserActions.push({ hash, action: String(body.action || '') });
+          browserActions.push({ hash, action: String(body.action || ''), owner: machine.owner, x: body.x, y: body.y });
           if (body.action === 'open' && failNextOpenWithContextError) {
             failNextOpenWithContextError = false;
             return content(res, 503, 'application/json', JSON.stringify({ error: '云电脑中的 Chromium 浏览器上下文暂不可用，正在重新连接', code: 'DOTS_BROWSER_CONTEXT_UNAVAILABLE' }));
@@ -245,7 +245,7 @@ try {
   appPort = await freePort();
   baseUrl = `http://127.0.0.1:${appPort}`;
   appServer = await startApp();
-  browser = await chromium.launch({ executablePath: process.env.DOTS_CHROME_BIN || findChrome(), headless: true });
+  browser = await chromium.launch({ executablePath: process.env.DOTS_CHROME_BIN || findChrome(), headless: true, ignoreDefaultArgs: ['--hide-scrollbars'] });
   const alphaContext = await browser.newContext({ viewport: { width: 1440, height: 980 }, deviceScaleFactor: 1 });
   page = await alphaContext.newPage();
   page.on('websocket', socket => {
@@ -290,7 +290,69 @@ try {
   }, 'Chrome API interaction should expose the recoverable worker error instead of flattening it into HTTP 500');
   await page.screenshot({ path: join(artifacts, '01-agent-view.png') });
 
-  await page.getByRole('button', { name: 'Take over' }).click();
+  const chatBox = await page.locator('.chat-panel').boundingBox();
+  const computerBox = await page.getByTestId('computer-split').boundingBox();
+  assert(chatBox && computerBox && Math.abs(chatBox.x + chatBox.width - computerBox.x) < 2, 'Cloud computer should share the screen with chat');
+  const cloudScreen = page.getByRole('button', { name: '点击云电脑画面接管' });
+  const clickCloudScreen = async () => {
+    await page!.waitForFunction(() => Boolean(document.querySelector<HTMLImageElement>('img[alt="Linux 云桌面画面"]')?.naturalWidth));
+    await cloudScreen.click({ position: { x: 80, y: 60 } });
+  };
+  // Delay an actual takeover request, then leave the screen before it finishes.
+  // The original click must be discarded and the server must end up agent-owned.
+  let finishTakeover!: () => void;
+  let takeoverStarted!: () => void;
+  const started = new Promise<void>(resolve => { takeoverStarted = resolve; });
+  const heldTakeover = new Promise<void>(resolve => { finishTakeover = resolve; });
+  await page.route('**/api/computer/take-over', async route => { takeoverStarted(); await heldTakeover; await route.continue(); }, { times: 1 });
+  const beforeCancelledClick = browserActions.length;
+  await clickCloudScreen();
+  await started;
+  await page.getByTestId('task-composer').click();
+  const returned = page.waitForResponse(response => response.url().endsWith('/api/computer/return-control') && response.status() === 200);
+  finishTakeover();
+  await returned;
+  assert.equal(machines.get(alphaHash)?.owner, 'agent');
+  assert.equal(browserActions.length, beforeCancelledClick, 'A cancelled first click reached the desktop');
+  await page.getByRole('button', { name: 'Take over', exact: true }).waitFor();
+
+  // Rejected ownership changes must never send the click or open noVNC.
+  await page.route('**/api/computer/take-over', route => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ error: 'E2E takeover unavailable' }) }), { times: 1 });
+  await clickCloudScreen();
+  await page.getByRole('alert').filter({ hasText: 'E2E takeover unavailable' }).waitFor();
+  assert.equal(machines.get(alphaHash)?.owner, 'agent');
+  assert.equal(await page.getByTestId('linux-desktop-view').count(), 0);
+  assert.equal(browserActions.length, beforeCancelledClick);
+  await page.getByRole('alert').getByRole('button').click();
+
+  // Keep an old poll response in flight while the first screen click takes over.
+  let finishPoll!: () => void;
+  let pollStarted!: () => void;
+  const polling = new Promise<void>(resolve => { pollStarted = resolve; });
+  const heldPoll = new Promise<void>(resolve => { finishPoll = resolve; });
+  await page.route('**/api/computer', async route => {
+    const response = await route.fetch();
+    pollStarted();
+    await heldPoll;
+    await route.fulfill({ response });
+  }, { times: 1 });
+  await polling;
+  const expectedPoint = await cloudScreen.evaluate(element => {
+    const image = element as HTMLImageElement;
+    const rect = image.getBoundingClientRect();
+    const scale = Math.min(rect.width / image.naturalWidth, rect.height / image.naturalHeight);
+    return { x: Math.round((80 - (rect.width - image.naturalWidth * scale) / 2) / scale), y: Math.round((60 - (rect.height - image.naturalHeight * scale) / 2) / scale) };
+  });
+  const firstClick = page.waitForResponse(response => response.url().endsWith('/api/computer/click') && response.status() === 200);
+  await clickCloudScreen();
+  const firstClickResponse = await firstClick;
+  assert.equal(firstClickResponse.status(), 200);
+  const deliveredClick = browserActions.at(-1)!;
+  assert.equal(deliveredClick.action, 'click');
+  assert.equal(deliveredClick.owner, 'user', 'The first click must wait for confirmed ownership');
+  assert.equal(deliveredClick.hash, alphaHash);
+  assert(Math.abs(deliveredClick.x! - expectedPoint.x) <= 1 && Math.abs(deliveredClick.y! - expectedPoint.y) <= 1, 'The first click should use full desktop coordinates');
+  finishPoll();
   const vncFrame = page.getByTestId('linux-desktop-view');
   await vncFrame.waitFor({ state: 'visible' });
   try {
@@ -305,6 +367,9 @@ try {
     }).catch(() => null);
     throw new Error(`Mock noVNC WebSocket did not connect: ${JSON.stringify({ frameState, remoteHttpPaths, remoteUpgradePaths, browserWebSocketEvents, remoteSocketEvents })}; ${error instanceof Error ? error.message : String(error)}`);
   }
+  await page.frameLocator('[data-testid="linux-desktop-view"]').locator('canvas').waitFor();
+  await page.keyboard.type('first click typing');
+  assert.equal(await page.frameLocator('[data-testid="linux-desktop-view"]').locator('canvas').getAttribute('data-keys'), 'first click typing', 'The first screen click must focus the noVNC keyboard');
   const browserControl = await page.evaluate(async () => {
     const statuses: number[] = [];
     for (const [path, body] of [
@@ -322,15 +387,22 @@ try {
   assert.equal(machines.get(alphaHash)?.url, 'https://example.test/cloud-e2e');
   await page.screenshot({ path: join(artifacts, '02-user-takeover.png') });
 
-  await page.getByRole('button', { name: 'Return control' }).click();
+  const closedSockets = browserWebSocketEvents.filter(event => event.startsWith('close:')).length;
+  await page.getByTestId('task-composer').click();
   await page.getByRole('status').filter({ hasText: 'Dot has control' }).waitFor({ state: 'visible' });
   await page.locator('img[alt="Linux 云桌面画面"]').waitFor({ state: 'visible' });
+  assert.equal(machines.get(alphaHash)?.owner, 'agent');
+  assert.equal(await page.getByTestId('linux-desktop-view').count(), 0);
+  assert(browserWebSocketEvents.filter(event => event.startsWith('close:')).length > closedSockets, 'Returning control must close the interactive desktop socket');
 
-  const created = await page.evaluate(async () => {
-    const response = await fetch('/api/tasks', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ instruction: '请在云电脑中创建俄罗斯方块游戏文件', engine: 'pi' }) });
-    return { status: response.status, task: await response.json() as { id: string } };
-  });
+  await page.getByTestId('engine-select').selectOption('pi');
+  await page.getByTestId('task-composer').fill('请在云电脑中创建俄罗斯方块游戏文件');
+  const taskResponse = page.waitForResponse(response => response.url().endsWith('/api/tasks') && response.request().method() === 'POST');
+  await page.getByTestId('task-composer').press('Enter');
+  const response = await taskResponse;
+  const created = { status: response.status(), task: await response.json() as { id: string } };
   assert.equal(created.status, 201);
+  await page.getByTestId('computer-split').waitFor();
   await page.waitForFunction(async id => {
     const response = await fetch('/api/state');
     const state = await response.json() as { tasks: { id: string; status: string }[] };
@@ -367,7 +439,7 @@ try {
     return { status: response.status, type: response.headers.get('content-type'), body: await response.text() };
   }, created.task.id);
   assert.deepEqual(linkedAsset, { status: 200, type: 'text/javascript; charset=utf-8', body: "document.querySelector('#demo-artifact').textContent = '俄罗斯方块预览';" }, 'Relative assets must resolve through the same task-scoped artifact route');
-  await page.locator('.sidebar button.nav[aria-label="你的 dot"]').click();
+  await page.getByRole('button', { name: '关闭电脑分栏' }).click();
   await page.getByTestId('dot-context-panel').waitFor({ state: 'visible' });
   await page.getByTestId(`context-output-task-${created.task.id}`).click();
   await page.locator('[data-testid="task-artifact"][data-artifact-path="tetris.html"]').waitFor({ state: 'visible' });
@@ -384,7 +456,8 @@ try {
   await page.getByRole('status').filter({ hasText: 'You have control' }).waitFor({ state: 'visible' });
   assert.equal(machines.get(alphaHash)?.url, `file:///workspace/tasks/${created.task.id}/tetris.html`, 'One click must open the generated HTML in the tenant cloud computer browser');
   assert(browserActions.some(entry => entry.hash === alphaHash && entry.action === 'open-artifact'), 'Opening the task output should be a visible, authenticated cloud-browser action');
-  await page.getByRole('button', { name: 'Return control' }).click();
+  await page.frameLocator('[data-testid="linux-desktop-view"]').locator('canvas').waitFor();
+  await page.frameLocator('[data-testid="task-artifact-preview"]').locator('#demo-artifact').click();
   await page.getByRole('status').filter({ hasText: 'Dot has control' }).waitFor({ state: 'visible' });
 
   const takeoverPauseTitle = 'E2E cloud takeover pause flow';
@@ -454,7 +527,7 @@ try {
   await betaPage.screenshot({ path: join(artifacts, '07-beta-isolated-desktop.png') });
   await betaContext.close();
   await alphaContext.close();
-  console.log(JSON.stringify({ result: 'passed', checks: ['cloud screenshot', 'local permission independence', 'recoverable browser-context status and error code', 'authenticated noVNC WebSocket proxy', 'takeover browser navigation/click/type', 'return control', 'remote Agent kernel dispatch', 'computer takeover pauses the active task and Chrome resumes it after control returns', 'chat artifact list and iframe preview with linked assets', 'sandboxed HTML preview headers', 'one-click cloud-browser artifact open and return control', 'cross-tenant artifact read/open denial', 'tenant token and runtime separation'], artifacts }, null, 2));
+  console.log(JSON.stringify({ result: 'passed', checks: ['chat and computer split with retained composer', 'first screen click coordinates and delayed noVNC keyboard focus', 'cancelled and rejected takeover send no desktop input', 'stale polling cannot undo takeover', 'outside clicks including other iframes return control and close noVNC', 'chat submission retains the computer pane', 'cloud screenshot', 'local permission independence', 'recoverable browser-context status and error code', 'authenticated noVNC WebSocket proxy', 'takeover browser navigation/click/type', 'return control', 'remote Agent kernel dispatch', 'computer takeover pauses the active task and Chrome resumes it after control returns', 'chat artifact list and iframe preview with linked assets', 'sandboxed HTML preview headers', 'one-click cloud-browser artifact open and return control', 'cross-tenant artifact read/open denial', 'tenant token and runtime separation'], artifacts }, null, 2));
 } catch (error) {
   if (page) await page.screenshot({ path: join(artifacts, 'failure.png'), fullPage: true }).catch(() => undefined);
   throw new Error(`${error instanceof Error ? error.message : String(error)}\n${logs.join('')}`);
