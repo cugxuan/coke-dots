@@ -10,7 +10,7 @@ The Coke Dots control plane can run on your own computer or on the Debian server
 - Remote Debian host: an SSH server and a rootful Docker Engine **28+**, with the Docker CLI installed. The SSH user must be able to access `/var/run/docker.sock` without an interactive password or `sudo` prompt. That account is an operator account; it is never given to a tenant Agent.
 - Key-based SSH authentication, a verified entry in `known_hosts`, and permission for local TCP forwarding. Password prompts and agent forwarding are disabled by the application.
 - Enough memory and disk for the selected workspaces. Each desktop defaults to a 2 CPU / 4096 MiB limit and a 512-process limit. The host kernel must support Chromium's sandbox under Docker's security profile.
-- Google OAuth and an OpenAI-compatible model endpoint, as in the main README.
+- Google OAuth (or the local administrator login below) and an OpenAI-compatible model endpoint.
 
 Docker 28+ is required because older Docker releases could expose localhost-published ports to machines on the same L2 network. See [Docker port publishing](https://docs.docker.com/engine/network/port-publishing/) and [Docker over SSH](https://docs.docker.com/engine/security/protect-access/).
 
@@ -78,11 +78,28 @@ Generate the token secret locally, for example with `openssl rand -hex 32`. Keep
 For local development run `npm run dev` and open `http://127.0.0.1:5173`. For a built service:
 
 ```sh
-npm run build
+VITE_DOTS_DEFAULT_ENGINE=pi npm run build
 NODE_ENV=production npm start
 ```
 
 Open `http://127.0.0.1:4317`, sign in and save the shared model settings before starting a Pi task. The app continues to bind to loopback; public HTTPS/reverse-proxy configuration is the same as the main README. Configure the service manager's working directory, data path and SSH credentials consistently. The controller must be running for task scheduling and browser access.
+
+### Local administrator login without Google
+
+For a single-user control plane on localhost, add these settings to the service's private environment file:
+
+```dotenv
+DOTS_AUTH_MODE=local
+DOTS_LOCAL_AUTH_TOKEN=<output-of-openssl-rand-hex-32>
+```
+
+Restrict the environment file to the service owner (`chmod 600`). The access key is a login credential, separate from both the model API key and the desktop token secret. Enter it in the web login form; it is exchanged for the same HttpOnly session cookie used by Google login. The fixed local administrator retains the same workspace across restarts and access-key changes. Existing sessions last up to 30 days; rotating the login key does not revoke existing sessions. Sign out to revoke a session.
+
+Local mode rejects missing/short keys and public origin/host settings at startup. Keep the service on loopback. For a control plane on another machine, use `ssh -N -L 4317:127.0.0.1:4317 user@host` and open `http://127.0.0.1:4317` on your computer. The default `DOTS_AUTH_MODE=google` retains Google OAuth and multi-user invitation login. Do not enable `DOTS_E2E_AUTH` in a deployed service.
+
+In the web app, open **设置 → 共享模型 API**, enter the provider's HTTPS API base URL, model name and key, and save. Use a **Pi** task for actions and files inside the Docker desktop. The endpoint must be reachable from the desktop container: `127.0.0.1` there is the container itself. A configured endpoint that is only listening on the control-plane host's loopback needs an explicit tunnel or proxy accessible to the desktop.
+
+An existing standalone preview container is not automatically adopted: its tokens, labels and volume ownership differ from a managed workspace. For migration, stop writes to the preview, back up its `/workspace`, create the target workspace's labelled volume, copy files preserving ownership, then let the connector create its managed container. Preserve the original volume until the migrated desktop and files have been checked. Never point multiple tenants at one preview volume.
 
 ## Model credential storage without Kubernetes
 

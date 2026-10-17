@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { CodeChallengeMethod, OAuth2Client } from 'google-auth-library';
 import { Store, type AuthSession } from './store.ts';
@@ -8,13 +8,39 @@ const oauthCookieName = 'coke_dots_oauth_state';
 const sessionLifetimeMs = 30 * 24 * 60 * 60 * 1000;
 
 export class AuthService {
-  private clientId = process.env.GOOGLE_CLIENT_ID?.trim() || '';
-  private clientSecret = process.env.GOOGLE_CLIENT_SECRET?.trim() || '';
+  private clientId: string;
+  private clientSecret: string;
+  private localToken: string;
+  private mode: string;
 
-  constructor(private store: Store, private port: number) {}
+  constructor(private store: Store, private port: number, environment: NodeJS.ProcessEnv = process.env) {
+    this.clientId = environment.GOOGLE_CLIENT_ID?.trim() || '';
+    this.clientSecret = environment.GOOGLE_CLIENT_SECRET?.trim() || '';
+    this.mode = environment.DOTS_AUTH_MODE?.trim() || 'google';
+    this.localToken = environment.DOTS_LOCAL_AUTH_TOKEN || '';
+    if (!['google', 'local'].includes(this.mode)) throw new Error('DOTS_AUTH_MODE must be google or local');
+    if (this.mode === 'local') {
+      if (!/^[\x21-\x7e]{32,256}$/.test(this.localToken)) throw new Error('Local login requires a random DOTS_LOCAL_AUTH_TOKEN of 32–256 characters');
+      if (environment.DOTS_PUBLIC_ORIGIN || environment.DOTS_PUBLIC_HOST) throw new Error('Local login is only for loopback access. Use SSH port forwarding, or Google login for a public deployment.');
+    }
+  }
 
-  configured() { return Boolean(this.clientId && this.clientSecret); }
+  configured() { return this.mode === 'google' && Boolean(this.clientId && this.clientSecret); }
+  localAuthAvailable() { return this.mode === 'local'; }
   e2eAuthAvailable() { return process.env.NODE_ENV === 'test' && process.env.DOTS_E2E_AUTH === '1'; }
+
+  localLogin(token: string, res: ServerResponse) {
+    if (!this.localAuthAvailable()) return json(res, 404, { error: 'Not found' });
+    if (token.length > 256 || !timingSafeEqual(createHash('sha256').update(token).digest(), createHash('sha256').update(this.localToken).digest())) {
+      return json(res, 401, { error: '访问密钥不正确' });
+    }
+    const account = this.store.signInLocal();
+    const sessionToken = randomToken();
+    const tokenHash = hash(sessionToken);
+    this.store.createSession(tokenHash, account.user.id, account.tenant.id, new Date(Date.now() + sessionLifetimeMs).toISOString());
+    setSessionCookie(res, sessionToken, sessionLifetimeMs, false);
+    return json(res, 200, { user: account.user, tenant: account.tenant, tenants: this.store.tenantsForUser(account.user.id) });
+  }
 
   e2eLogin(email: string, res: ServerResponse) {
     if (!this.e2eAuthAvailable()) return json(res, 404, { error: 'Not found' });

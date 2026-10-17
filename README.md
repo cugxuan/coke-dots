@@ -4,6 +4,8 @@ An evidence-led, local-first personal agent project. Features are developed on s
 
 ## Run locally
 
+For single-user access without Google OAuth, set `DOTS_AUTH_MODE=local` and a random `DOTS_LOCAL_AUTH_TOKEN` (generate with `openssl rand -hex 32`) in a private environment file. The login page asks for that access key and opens a persistent local administrator workspace. This mode is for localhost or SSH port forwarding, refuses public origin/host configuration, and never requires the E2E test login. The default remains Google. See the [Docker control-plane setup](docs/debian-ssh-docker.md#local-administrator-login-without-google).
+
 Requires Node.js 24 or newer. Copy `.env.example` to a local environment file (do not commit OAuth credentials), register a Google OAuth web client, and set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and the exact callback URI `http://127.0.0.1:4317/auth/google/callback`. Then run `npm install` and `npm run dev`, and open `http://127.0.0.1:5173`. Google sign-in requests only OpenID Connect identity, email, and profile scopes.
 
 For a reverse-proxy subpath deployment such as `/dots-demo`, set `DOTS_BASE_PATH=/dots-demo`, `DOTS_APP_URL=https://your-host/dots-demo`, and register `GOOGLE_REDIRECT_URI=https://your-host/dots-demo/auth/google/callback`. Preserve the `/dots-demo` prefix when proxying requests; the app routes both the mounted path and its internal root path. Forward the public Host and Origin and, for a trusted loopback proxy, the configured `X-Dots-Proxy-Token`. The OAuth state cookie is scoped to the exact callback path, and a successful sign-in returns to the configured app subpath.

@@ -148,7 +148,16 @@ const server = createServer(async (req, res) => {
   if (path === '/auth/slack/callback' && req.method === 'GET') return slack.finish(req, res, url, auth.session(req));
   if (!path.startsWith('/api/')) return serveStatic(req, res, path);
   if (path === '/api/health' && req.method === 'GET') return reply(res, 200, { ok: true });
-  if (path === '/api/auth/config' && req.method === 'GET') return reply(res, 200, { googleConfigured: auth.configured(), e2eAuthAvailable: auth.e2eAuthAvailable() });
+  if (path === '/api/auth/config' && req.method === 'GET') return reply(res, 200, { googleConfigured: auth.configured(), localAuthAvailable: auth.localAuthAvailable(), e2eAuthAvailable: auth.e2eAuthAvailable() });
+  if (path === '/api/auth/local/login' && req.method === 'POST') {
+    if (!auth.localAuthAvailable()) return reply(res, 404, { error: 'Not found' });
+    if (!validMutationOrigin(req)) return reply(res, 403, { error: '请求来源无效' });
+    let body: Record<string, unknown>;
+    try { body = await readJson(req, 1024); }
+    catch { return reply(res, 400, { error: '登录请求无效' }); }
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return reply(res, 400, { error: '登录请求无效' });
+    return auth.localLogin(typeof body.token === 'string' ? body.token : '', res);
+  }
   if (path === '/api/auth/google/start' && req.method === 'GET') return auth.begin(req, res);
   if (path === '/api/auth/e2e/login' && req.method === 'POST' && auth.e2eAuthAvailable()) {
     if (!validMutationOrigin(req)) return reply(res, 403, { error: '请求来源无效' });
@@ -194,7 +203,7 @@ const server = createServer(async (req, res) => {
   }
 
   const session = auth.session(req);
-  if (!session) return reply(res, 401, { error: '请先使用 Google 登录' });
+  if (!session) return reply(res, 401, { error: '请先登录' });
   if (!validMutationOrigin(req)) return reply(res, 403, { error: '请求来源无效' });
 
   if (path === '/api/slack' && req.method === 'GET') return reply(res, 200, slack.snapshot(session.tenant.id));

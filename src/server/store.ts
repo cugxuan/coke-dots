@@ -500,16 +500,24 @@ export class Store {
   }
 
   signInGoogle(identity: GoogleIdentity): { user: AppUser; tenant: TenantSummary } {
+    return this.signInIdentity('https://accounts.google.com', identity);
+  }
+
+  signInLocal(): { user: AppUser; tenant: TenantSummary } {
+    return this.signInIdentity('urn:coke-dots:local', { subject: 'administrator', email: 'admin@localhost', name: '本机管理员' });
+  }
+
+  private signInIdentity(issuer: string, identity: GoogleIdentity): { user: AppUser; tenant: TenantSummary } {
     const now = new Date().toISOString();
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      let row = this.db.prepare('SELECT id FROM users WHERE issuer=? AND subject=?').get('https://accounts.google.com', identity.subject) as { id: string } | undefined;
+      let row = this.db.prepare('SELECT id FROM users WHERE issuer=? AND subject=?').get(issuer, identity.subject) as { id: string } | undefined;
       if (row) {
         this.db.prepare('UPDATE users SET email=?,name=? WHERE id=?').run(identity.email, identity.name, row.id);
       } else {
         const userId = randomUUID();
         this.db.prepare('INSERT INTO users(id,issuer,subject,email,name,created_at) VALUES (?,?,?,?,?,?)')
-          .run(userId, 'https://accounts.google.com', identity.subject, identity.email, identity.name, now);
+          .run(userId, issuer, identity.subject, identity.email, identity.name, now);
         row = { id: userId };
       }
       let tenant = this.db.prepare(`SELECT t.id,t.name,t.kind,m.role FROM memberships m JOIN tenants t ON t.id=m.tenant_id

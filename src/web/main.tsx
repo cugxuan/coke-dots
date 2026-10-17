@@ -82,6 +82,7 @@ function App() {
   const [authChecked, setAuthChecked] = useState(false);
   const [stateLoaded, setStateLoaded] = useState(false);
   const [googleConfigured, setGoogleConfigured] = useState(false);
+  const [localAuthAvailable, setLocalAuthAvailable] = useState(false);
   const [e2eAuthAvailable, setE2eAuthAvailable] = useState(false);
   const [invitations, setInvitations] = useState<WorkspaceInvitation[]>([]);
   const [state, setState] = useState<Snapshot>(initial);
@@ -135,7 +136,7 @@ function App() {
   useEffect(() => {
     void appFetch('/api/auth/me').then(async response => response.ok ? await response.json() as AuthContext : null)
       .then(setAuthContext).catch(() => setAuthContext(null)).finally(() => setAuthChecked(true));
-    void appFetch('/api/auth/config').then(response => response.json()).then(data => { setGoogleConfigured(Boolean(data.googleConfigured)); setE2eAuthAvailable(Boolean(data.e2eAuthAvailable)); }).catch(() => { setGoogleConfigured(false); setE2eAuthAvailable(false); });
+    void appFetch('/api/auth/config').then(response => response.json()).then(data => { setGoogleConfigured(Boolean(data.googleConfigured)); setLocalAuthAvailable(Boolean(data.localAuthAvailable)); setE2eAuthAvailable(Boolean(data.e2eAuthAvailable)); }).catch(() => { setGoogleConfigured(false); setLocalAuthAvailable(false); setE2eAuthAvailable(false); });
   }, []);
 
   useEffect(() => {
@@ -216,10 +217,13 @@ function App() {
     if (!authContext) return;
     setStateLoaded(false);
     const stream = new EventSource(appPath('/api/events'));
-    stream.onmessage = event => { setState(JSON.parse(event.data)); setStateLoaded(true); };
+    stream.onmessage = event => {
+      setState(JSON.parse(event.data)); setStateLoaded(true);
+      setError(current => current === '与本机服务的连接已断开，正在重连。' ? '' : current);
+    };
     stream.onerror = () => {
       setError('与本机服务的连接已断开，正在重连。');
-      void appFetch('/api/auth/me').then(response => response.ok ? response.json() as Promise<AuthContext> : null).then(next => { if (!next) setAuthContext(null); }).catch(() => setAuthContext(null));
+      void appFetch('/api/auth/me').then(response => { if (response.status === 401) setAuthContext(null); }).catch(() => { /* Keep the session while the service restarts; EventSource retries. */ });
     };
     return () => stream.close();
   }, [authContext?.tenant.id]);
@@ -417,7 +421,7 @@ function App() {
   }
 
   if (!authChecked) return <div className="auth-loading">Coke Dots</div>;
-  if (!authContext) return <LoginScreen googleConfigured={googleConfigured} e2eAuthAvailable={e2eAuthAvailable} />;
+  if (!authContext) return <LoginScreen googleConfigured={googleConfigured} localAuthAvailable={localAuthAvailable} e2eAuthAvailable={e2eAuthAvailable} />;
 
   const workSurface = ['activity', 'scheduled', 'computer', 'pages'].includes(view);
   const onboardingMode = view === 'chat' && !selectedTask && !hasConversationHistory && voiceCallsLoaded;
@@ -513,10 +517,11 @@ function App() {
   </div>;
 }
 
-function LoginScreen({ googleConfigured, e2eAuthAvailable }: { googleConfigured: boolean; e2eAuthAvailable: boolean }) {
+function LoginScreen({ googleConfigured, localAuthAvailable, e2eAuthAvailable }: { googleConfigured: boolean; localAuthAvailable: boolean; e2eAuthAvailable: boolean }) {
   const [desktopPending, setDesktopPending] = useState(false);
   const [desktopError, setDesktopError] = useState('');
   const [e2eEmail, setE2eEmail] = useState('alpha@example.test');
+  const [localToken, setLocalToken] = useState('');
   const isElectron = /Electron/i.test(navigator.userAgent);
   const authError = new URLSearchParams(window.location.search).get('authError');
   const authErrors: Record<string, string> = { cancelled: '你取消了登录。', expired: '登录请求已过期，请重试。', invalid: '登录返回信息无效。', invalid_identity: 'Google 身份验证未通过。', missing_identity: 'Google 没有返回身份令牌。', sign_in_failed: 'Google 登录失败，请检查配置后重试。' };
@@ -552,7 +557,31 @@ function LoginScreen({ googleConfigured, e2eAuthAvailable }: { googleConfigured:
       window.location.reload();
     } catch (error) { setDesktopError(error instanceof Error ? error.message : String(error)); }
   }
-  return <main className="auth-page"><div className="auth-card"><div className="brand"><span className="brand-mark">●</span> Coke Dots</div><h1>让你的个人代理持续推进工作</h1><p>使用 Google 账号登录。任务、记录和浏览器会话按工作区隔离；模型 API 由 Coke Dots 实例统一配置。</p>{authError && <div className="auth-error">{authErrors[authError] || '登录失败，请重试。'}</div>}{desktopError && <div className="auth-error">{desktopError}</div>}{googleConfigured ? isElectron ? <button className="google-login" disabled={desktopPending} onClick={() => void beginDesktopLogin()}><span>G</span>{desktopPending ? '等待浏览器完成登录…' : '使用 Google 登录'}</button> : <a className="google-login" href={appPath('/api/auth/google/start')}><span>G</span>使用 Google 登录</a> : <div className="auth-setup"><strong>需要配置 Google OAuth</strong><span>在本机服务环境中设置 GOOGLE_CLIENT_ID 和 GOOGLE_CLIENT_SECRET，然后重启服务。</span></div>}{e2eAuthAvailable && <div className="e2e-login"><label htmlFor="e2e-email">E2E 测试账号</label><input id="e2e-email" type="email" value={e2eEmail} onChange={event => setE2eEmail(event.target.value)} /><button data-testid="e2e-sign-in" className="google-login" onClick={() => void signInE2e()}>测试环境登录</button></div>}<small>仅申请基本身份信息；Coke Dots 不会取得 Gmail 或 Google Drive 权限。</small></div></main>;
+  async function signInLocal() {
+    setDesktopError(''); setDesktopPending(true);
+    try {
+      const response = await appFetch('/api/auth/local/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: localToken }) });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+      setLocalToken('');
+      window.location.reload();
+    } catch (error) { setDesktopError(error instanceof Error ? error.message : String(error)); }
+    finally { setDesktopPending(false); }
+  }
+  return <main className="auth-page"><div className="auth-card">
+    <div className="brand"><span className="brand-mark">●</span> Coke Dots</div>
+    <h1>让你的个人代理持续推进工作</h1>
+    <p>{localAuthAvailable ? '输入访问密钥，进入本机管理员工作区。' : '使用 Google 账号登录。'}任务、记录和浏览器会话按工作区隔离；模型 API 由 Coke Dots 实例统一配置。</p>
+    {authError && <div className="auth-error">{authErrors[authError] || '登录失败，请重试。'}</div>}
+    {desktopError && <div className="auth-error" role="alert">{desktopError}</div>}
+    {localAuthAvailable ? <form className="local-login" onSubmit={event => { event.preventDefault(); void signInLocal(); }}>
+      <label htmlFor="local-access-token">访问密钥</label>
+      <input id="local-access-token" type="password" autoComplete="current-password" required value={localToken} onChange={event => setLocalToken(event.target.value)} />
+      <button className="google-login" disabled={desktopPending || !localToken}>{desktopPending ? '正在登录…' : '进入本机工作区'}</button>
+    </form> : googleConfigured ? isElectron ? <button className="google-login" disabled={desktopPending} onClick={() => void beginDesktopLogin()}><span>G</span>{desktopPending ? '等待浏览器完成登录…' : '使用 Google 登录'}</button> : <a className="google-login" href={appPath('/api/auth/google/start')}><span>G</span>使用 Google 登录</a> : <div className="auth-setup"><strong>需要配置 Google OAuth</strong><span>在本机服务环境中设置 GOOGLE_CLIENT_ID 和 GOOGLE_CLIENT_SECRET，然后重启服务。</span></div>}
+    {e2eAuthAvailable && <div className="e2e-login"><label htmlFor="e2e-email">E2E 测试账号</label><input id="e2e-email" type="email" value={e2eEmail} onChange={event => setE2eEmail(event.target.value)} /><button data-testid="e2e-sign-in" className="google-login" onClick={() => void signInE2e()}>测试环境登录</button></div>}
+    <small>{localAuthAvailable ? '访问密钥由本机部署管理员提供。模型 API 密钥请在登录后的设置中填写。' : '仅申请基本身份信息；Coke Dots 不会取得 Gmail 或 Google Drive 权限。'}</small>
+  </div></main>;
 }
 
 function ActivityView({ tenantId, profileName, state, stateLoaded, onSelectTask, onOpenPage }: { tenantId: string; profileName: string; state: Snapshot; stateLoaded: boolean; onSelectTask: (taskId: string) => void; onOpenPage: (pageId: string, taskId?: string | null) => void }) {
@@ -865,7 +894,7 @@ function Profile({ state, auth, onError, onEditAppearance, onManageComputerAcces
       {membersError && <small className="member-error">{membersError}</small>}
       {!['owner', 'admin'].includes(auth.tenant.role) && <small>只有工作区所有者或管理员可以添加成员。</small>}
     </div>
-    <div className="section-heading model-heading"><h2>共享模型 API</h2><p>所有 Google 账号和工作区共用同一模型地址、名称与 API Key。任务、记忆和工作区数据仍相互隔离。</p></div>
+    <div className="section-heading model-heading"><h2>共享模型 API</h2><p>所有账号和工作区共用同一模型地址、名称与 API Key。任务、记忆和工作区数据仍相互隔离。</p></div>
     <div className="profile-card model-card" data-testid="shared-model-settings">
       {canManageSharedModel ? <>
         <label>API 地址<input aria-label="共享模型 API 地址" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} /></label>
