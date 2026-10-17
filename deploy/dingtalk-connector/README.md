@@ -1,6 +1,6 @@
 # Coke Dots DingTalk connector gateway
 
-This is an isolated DWS connector service. It is not the tenant cloud-computer Agent runtime and it does not replace the DingTalk Stream robot gateway. Pi/DSH remain in each tenant's Debian cloud computer. A Pi/DSH tool bridge for the document operations described below is a later feature; Agents must call scoped connector operations rather than read DWS profile files.
+This is an isolated DWS connector service. It is not the tenant cloud-computer Agent runtime and it does not replace the DingTalk Stream robot gateway. Pi/DSH remain in each tenant's Debian cloud computer. The control plane provides tenant/user/task-scoped Agent bridges for document search/read/create and calendar reads when the initiating task requests those operations. The gateway also exposes document updates separately; the Agent document bridge is limited to search/read/create. Agents call scoped operations rather than read DWS profile files.
 
 ## Credential and identity boundary
 

@@ -11,5 +11,6 @@ data/
 .DS_Store
 coverage/
 artifacts/
+.playwright-cli/
 research/frames/
 research/videos/

@@ -1,61 +1,138 @@
 # Coke Dots
 
-An evidence-led, local-first personal agent project. Features are developed on separate branches, with observed Dots behavior recorded before implementation.
+一个可自托管的个人 Agent 工作台，把对话、持续任务、定时自动化和独立云电脑放在一起。
 
-## Run locally
+[快速开始](#快速开始) · [配置指南](docs/configuration.md) · [部署](#部署) · [参与贡献](CONTRIBUTING.md) · [报告问题](https://github.com/cugxuan/coke-dots/issues)
 
-For single-user access without Google OAuth, set `DOTS_AUTH_MODE=local` and a random `DOTS_LOCAL_AUTH_TOKEN` (generate with `openssl rand -hex 32`) in a private environment file. The login page asks for that access key and opens a persistent local administrator workspace. This mode supports localhost, SSH port forwarding, [explicit LAN access](docs/debian-ssh-docker.md#lan-access) and an [HTTPS domain through a trusted proxy](docs/debian-ssh-docker.md#https-domain-access), and never requires the E2E test login. The default remains Google. See the [Docker control-plane setup](docs/debian-ssh-docker.md#local-administrator-login-without-google).
+Coke Dots 使用 React、TypeScript、Node.js 和 SQLite 构建。任务由服务端 Worker 执行，关闭网页后仍可继续；需要浏览器和文件操作时，可以接入按工作区隔离的 Debian 云电脑。
 
-Requires Node.js 24 or newer. Copy `.env.example` to a local environment file (do not commit OAuth credentials), register a Google OAuth web client, and set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and the exact callback URI `http://127.0.0.1:4317/auth/google/callback`. Then run `npm install` and `npm run dev`, and open `http://127.0.0.1:5173`. Google sign-in requests only OpenID Connect identity, email, and profile scopes.
+项目目前处于早期开发阶段，接口和部署方式可能调整。它是受 Dots 启发的独立项目，与 OpenAI 无隶属关系。
 
-For a reverse-proxy subpath deployment such as `/dots-demo`, set `DOTS_BASE_PATH=/dots-demo`, `DOTS_APP_URL=https://your-host/dots-demo`, and register `GOOGLE_REDIRECT_URI=https://your-host/dots-demo/auth/google/callback`. Preserve the `/dots-demo` prefix when proxying requests; the app routes both the mounted path and its internal root path. Forward the public Host and Origin and, for a trusted loopback proxy, the configured `X-Dots-Proxy-Token`. The OAuth state cookie is scoped to the exact callback path, and a successful sign-in returns to the configured app subpath.
+## 主要功能
 
-The Model API is configured once for the Coke Dots server and reused by every Google account and workspace. Endpoint and model name are stored in instance-scoped SQLite settings. By default the API key uses the `coke-dots-system/shared-model-api` Kubernetes Secret; SSH Docker mode defaults to a private instance credential file on the control plane. The workspace that first saves the shared configuration becomes its administrator. Other workspaces can use the model but cannot edit its shared credentials. `DOTS_MODEL_BASE_URL` and `DOTS_MODEL` can bootstrap model metadata; `DOTS_MODEL_API_KEY` is accepted only by isolated E2E fixtures. Save the real credential in the signed-in model settings UI.
+- **持续任务**：查看进度、补充指令、暂停或停止任务；支持一层、最多三个子任务的委派。
+- **定时自动化**：按间隔、每天或每周运行，管理时区、执行记录和网页监控。
+- **云电脑**：在 Debian 桌面中运行 Pi Agent，使用 Chromium、读写任务文件、预览产物，并随时接管或交还控制权。
+- **工作区协作**：Google 登录、工作区邀请与角色管理；任务、文件和浏览器会话按工作区隔离。单人部署也支持访问密钥登录。
+- **知识与审批**：Scratchpad 页面、工作区笔记、个人 Dot 记忆，以及页面写入规则和审批。
+- **扩展能力**：可配置的语音通话、Slack 和钉钉集成；这些功能需要各自的服务配置和授权。
 
-For a Debian host reachable over SSH, use [single-host Docker deployment](docs/debian-ssh-docker.md). Set `DOTS_COMPUTER_BACKEND=ssh-docker` to run isolated desktop/Agent containers and keep model credentials in a private server file, with no Kubernetes dependency. The existing `DOTS_COMPUTER_BACKEND=linux-desktop` Kubernetes deployment remains available; the two modes share desktop, browser and Agent behavior.
+## 快速开始
 
-The background worker and web UI are separate processes. Closing the browser window leaves the worker running. `DOTS_DATA_DIR` defaults to `./data`; the SQLite database is never committed. Starting the server again recovers any task left in `working` state. Without a configured model, tasks explicitly fail and can be retried after configuration.
+下面的流程启动单用户 Web 版，使用本地访问密钥和文件形式的模型凭据存储，无需 Google OAuth 或 Kubernetes。
 
-For the Mac shell, run `npm run desktop`. It builds the web UI, server and Electron wrapper, starts a detached local server if needed, and opens the app. Closing the window leaves that server running. `npm run dev:desktop` runs the UI with Vite. The current shell requires Node.js 24 on the Mac and is a local development build, not a signed installer.
+### 1. 安装
 
-## Automated browser tests
+准备 **Node.js 24+**、npm 和 Git。以下命令适用于 macOS / Linux：
 
-Run `npm test` for the unit suite, `npm run test:e2e` for the Chrome click-through, and `npm run test:e2e:base-path` for mobile Google OAuth through the mounted `/dots-demo` path. The base-path test uses a local mock OIDC provider but exercises the browser redirect, state cookie, PKCE exchange, signed ID-token verification, session creation, and return to the mobile app. It does not use a real Google account or replace a signed-in public Chrome check. Local tests use an in-memory or temporary mode-0600 credential store, so they never read or change developer Keychain entries. The browser suite builds the web client, launches a loopback-only service against a fresh temporary SQLite directory, and records viewport screenshots, browser video, Playwright traces, server logs and a JSON manifest under `artifacts/e2e/<run>/`. It needs local Google Chrome; set `DOTS_CHROME_BIN` if Chrome is installed elsewhere.
+```sh
+git clone https://github.com/cugxuan/coke-dots.git
+cd coke-dots
+npm ci
+cp .env.example .env
+chmod 600 .env
+```
 
-The suite covers login-screen rendering, three-account isolation, pending workspace invitations and acceptance/revocation, member removal, role controls, persistent tasks and redirection, the paged tenant-scoped Activity log and task navigation, explicit task stop while a model request is running, cancellation of a pending page approval when its task is stopped, explicitly managed workspace memories reaching the model request, tenant-scoped custom rules for Scratchpad writes, pending approval with member review, approve/decline without premature writes, agent-created Scratchpad pages opened from chat, recurring schedules, service-restart recovery, shared Model API configuration and a real authenticated model request from a second Google-style account, supported model/Pi/DeepSeek Harness routing, disabled-kernel rejection, and the computer browser's open/take-over/navigate/click/type/return path. Its sign-in button is a test-only fixture, enabled only when both `NODE_ENV=test` and `DOTS_E2E_AUTH=1`; it accepts only `@example.test` identities and uses the disposable test database. This exercises authenticated product flows without Google secrets, but does not replace a real Google OAuth acceptance test. Local screenshots and recordings document Coke Dots behavior; they are not a pixel comparison against OpenAI Dots. Reference-frame extraction and comparison remain pending in the [evidence ledger](research/README.md).
+### 2. 配置登录
 
-Current agent execution includes one-level delegation to up to three independent child tasks. Each child uses an explicitly selected engine only when that engine is available in the tenant's current runtime set; omitted choices inherit the parent's engine. Children cannot delegate recursively and return their outcomes to the parent. Activity cards identify each child's engine. Tenant scope and the existing task-level engine choices are preserved.
+生成一枚访问密钥：
 
-Agent execution also includes a tenant-scoped Scratchpad page action when enabled by the active workspace rule. The first custom-rule scope offers the four documented handling modes for Scratchpad writes; an approval-mode proposal is persisted without changing the page until a workspace member approves it. Browser, local-file, and external-account tools remain separate feature work, so these rules do not grant such access. The agent must not claim it performed external actions when no tool was used. See [the evidence ledger](research/README.md) for confirmed behavior and visual gaps.
+```sh
+openssl rand -hex 32
+```
 
-Activity can stop an individual one-off task, including a delegated child. Stop is terminal, interrupts supported active agent calls, and cancels that task's pending local page approval without writing the proposed page. Stopped tasks cannot be resumed or redirected. Stopping a parent stops its active children; stopping one child leaves its parent waiting for the remaining children.
+编辑 `.env`，加入以下配置，并用上一步的输出替换占位符：
 
-## Agent engines
+```dotenv
+DOTS_AUTH_MODE=local
+DOTS_LOCAL_AUTH_TOKEN=<粘贴生成的访问密钥>
+DOTS_MODEL_SECRET_BACKEND=file
+```
 
-Each task records its selected engine and its own workspace. The adapter contract returns a durable state (`done`, `waiting`, `scheduled`, or `delegating`), message, optional next check time, optional native session ID and up to three bounded child instructions. A child can choose one of the engines currently available to its tenant, or inherit its parent's engine. The UI shows available engines and keeps each task's choice on retries and restarts.
+访问密钥用于登录 Coke Dots，与模型服务的 API Key 是两个不同的凭据。`.env` 和运行数据已加入 Git 忽略规则。
 
-- **Model API:** OpenAI-compatible Chat Completions via the instance-wide shared settings. The shared profile saves only model name and endpoint in instance-scoped SQLite; the API key uses the selected Kubernetes Secret or private file store. This backend has no tools.
-- **Pi:** Install the optional `@mariozechner/pi-coding-agent` package, configure Pi's model credentials, and set `DOTS_PI_ENABLED=1`. The local adapter supplies Pi's read-only tools and stores its file-backed native session under the task's tenant-scoped workspace (`.coke-dots/pi-sessions`). Cloud-computer Agent tasks run in the tenant's Debian computer with their working directory fixed to `/workspace/tasks/<task-id>`; they may create and edit files there without a separate approval. Writes to another task directory, system settings, or external services are outside this default grant. Task retries and scheduled runs reopen a session by its ID; if the ID was not committed before a restart, a single existing session is recovered. Ambiguous or cross-task session IDs fail closed.
-- **DeepSeek Harness:** Install the optional SDK/runtime and set `DOTS_DSH_BIN` plus `DOTS_DSH_READ_ONLY_CONFIG` to a separately verified, read-only profile. The SDK preserves a native session ID. This adapter is opt-in because the chosen runtime profile determines its tools and credentials.
+### 3. 启动
 
-Claude Code is not a supported backend. The selectable backends are Model API, Pi, and DeepSeek Harness; Pi and DeepSeek Harness are the Agent kernels available to run inside a tenant cloud computer. Existing Claude task rows remain visible as historical records, but new tasks and delegated children cannot select that engine.
+```sh
+npm run build
+npm start
+```
 
-All engines must return the same structured task decision. A missing engine, invalid output or failed call is surfaced as a failed task; Coke Dots does not fabricate success. External write and send permissions are not yet connected to these engines.
+打开 [http://127.0.0.1:4317](http://127.0.0.1:4317)，输入访问密钥。开发时可改用 `npm run dev`，页面地址为 [http://127.0.0.1:5173](http://127.0.0.1:5173)。
 
-### Live model smoke check
+### 4. 连接模型
 
-`npm run test:live-model` exercises the same OpenAI-compatible adapter used by background tasks and requires `DOTS_LIVE_MODEL_API_KEY`. The defaults match the current [DeepSeek Chat Completions API](https://api-docs.deepseek.com/api/create-chat-completion/): base URL `https://api.deepseek.com` and model `deepseek-flash`. Override them with `DOTS_LIVE_MODEL_BASE_URL` and `DOTS_LIVE_MODEL`. The command makes one small request, verifies the structured task response and a unique marker, and prints status, model, marker presence, and elapsed time without printing the response or key. For interactive use, pass `--stdin-key`; the command temporarily disables terminal echo while reading the key, then restores the original terminal settings. The key is placed in this process environment only and is not written to SQLite or Keychain.
+登录后点击左侧的 **你的 dot 设置**（或账户头像），找到 **共享模型 API**，填写支持 Chat Completions 的模型服务地址、模型名称和 API Key，保存后选择 **模型 API** 创建任务。
 
-`npm run test:live-volcengine-voice` makes one short Chinese text-to-speech turn against the real SeedDuplex endpoint. It verifies the API Key handshake, session creation, and returned PCM audio, and prints sanitized provider status/error diagnostics without the key. It does not exercise microphone capture or Agent task dispatch. This call may consume voice quota; first confirm the Speech Console has enabled the **端到端实时语音** resource for the same project as the API Key.
+模型 API 模式提供文本推理，不直接执行浏览器、终端或文件操作。需要这些能力时，继续配置下方的 **SSH + Docker 云电脑** 和 Pi。
 
-## Accounts and tenant isolation
+模型配置在整个实例内共享，首次保存配置的工作区成为模型管理员工作区。普通运行应在页面中保存 API Key；`.env.example` 中的 `DOTS_MODEL_API_KEY` 仅供隔离测试使用。
 
-Google's immutable OpenID Connect `sub` identifies a user; verified email addresses are used to address workspace invitations. The first Google account claims the pre-authentication local workspace, preserving any existing local data. Later accounts get separate personal workspaces. Users can create additional workspaces and switch among memberships. An owner or admin can invite a verified Google email; the matching account must sign in and explicitly accept within seven days before it becomes a member. Pending invitations can be revoked, and removing a member revokes that member's sessions in the workspace. Coke Dots does not send invitation email; the inviter must notify recipients separately.
+## 部署
 
-Tasks, activity entries, scheduled checks, profiles, workspace directories, and computer browser profiles are scoped by tenant ID. The Model API endpoint, model name, and credential are intentionally instance-wide so every Google account and workspace can use the same provider configuration; only the designated model-admin workspace's owner or admins can change it. API requests require an opaque server-side session in an HttpOnly cookie and the session's selected workspace membership is checked on every request. Google ID tokens are signature/audience/expiry verified; OAuth state, PKCE, and nonce are validated. The server defaults to loopback; an explicitly configured LAN listener also permits authenticated users from the configured subnet. HTTPS domains require an explicitly configured public origin and trusted proxy; access-key login sets Secure cookies on that public host while preserving local HTTP access.
+| 方式 | 适用场景 | 入口 |
+| --- | --- | --- |
+| 本地 Web | 单人使用、开发、模型 API 任务 | 上面的快速开始 |
+| SSH + Docker | 在一台 Debian 主机运行独立桌面和 Agent | [部署指南](docs/debian-ssh-docker.md) |
+| Kubernetes / K3d | 使用已有集群运行租户桌面 | [部署指南](docs/linux-cloud-desktop.md) |
+| macOS Electron | 本地桌面开发外壳，尚无签名安装包 | [桌面运行说明](docs/configuration.md#electron-桌面外壳) |
 
-Each workspace can keep up to 20 explicitly entered notes (up to 1,000 characters each). Members can read them; creators and workspace administrators can edit or delete them. The worker includes that workspace's notes in agent requests as background facts. Coke Dots does not extract or infer notes from chat history.
+局域网访问和公网 HTTPS 需要显式配置，见 [LAN](docs/debian-ssh-docker.md#lan-access)、[HTTPS 域名](docs/debian-ssh-docker.md#https-domain-access)及[子路径部署](docs/configuration.md#反向代理与子路径)。
 
-The local server owns optional CLI/runtime credentials for Pi and DeepSeek Harness; those host-level engine identities are shared by workspaces in this first cut. Workspace data and browser sessions are isolated. The Model API credential is shared instance-wide by design. Per-member engine credentials remain follow-up work before exposing shared workspaces over a network.
+## Agent 引擎
 
-The project is independent and is not affiliated with OpenAI.
+| 引擎 | 能力与前提 |
+| --- | --- |
+| 模型 API | 使用实例共享的 Chat Completions 配置；不带执行工具 |
+| Pi | 可选 SDK；本地适配器使用只读工具，云电脑适配器提供终端、文件和浏览器操作 |
+| DeepSeek Harness | 可选 SDK / runtime；需显式配置，工具能力取决于所用适配器与 profile |
+
+任务会保留引擎选择和可用的原生会话 ID。缺少配置、引擎不可用或执行失败时会显示失败，不会用模拟结果代替真实执行。具体配置见[配置指南](docs/configuration.md#agent-引擎)。
+
+## 项目结构
+
+```text
+src/web/                    React 界面
+src/server/                 HTTP API、认证、SQLite、任务调度与集成
+src/shared/                 共享类型和领域逻辑
+deploy/linux-desktop/       Debian 桌面、浏览器 Worker 与 Agent runtime
+deploy/dingtalk-connector/  独立钉钉连接器
+electron/                   Electron 桌面外壳
+tests/                      单元测试和浏览器 / 运行时集成测试
+scripts/                    构建、测试与研究工具
+docs/                       配置、部署和维护文档
+examples/                   演示场景与样例
+research/                   参考行为、设计依据与历史验证记录
+```
+
+## 开发与测试
+
+```sh
+npm run dev       # API :4317 + Vite :5173
+npm run build     # TypeScript 检查 + 前端构建
+npm test          # 隔离的单元测试
+npm run test:e2e  # Chrome UI + 模拟云电脑流程
+```
+
+浏览器测试需要安装 Chrome；非默认安装路径通过 `DOTS_CHROME_BIN` 指定。完整命令、平台要求和验证范围见[贡献指南](CONTRIBUTING.md#测试)。
+
+欢迎通过 [Issue](https://github.com/cugxuan/coke-dots/issues) 报告可复现的问题、提出改进建议，或提交小范围的 Pull Request。开始前请阅读[贡献指南](CONTRIBUTING.md)。
+
+## 数据与当前边界
+
+- 默认数据目录为 `./data`，包含 SQLite 和本地工作区数据；云电脑文件位于对应租户的 Docker volume 或 Kubernetes PVC。升级或迁移前需一并备份相关数据和私有凭据。
+- 模型配置与模型凭据是实例级共享配置，任务与会话数据按租户隔离；本地 Pi / Harness 的宿主机凭据也不是每位成员独立一份。
+- 自托管不代表离线推理。模型、语音和连接器会按配置访问外部服务。
+- 页面审批规则只控制 Scratchpad 写入，不是所有外部操作的统一权限系统；文件附件目前支持有限大小的 UTF-8 文本 / 代码文件。
+- 本地测试、模拟服务测试与真实部署验收是不同范围。公开演示的可用性不由本仓库的构建结果保证。
+
+## 更多文档
+
+- [配置指南](docs/configuration.md)：登录、数据、模型、引擎、语音和反向代理。
+- [钉钉连接器](deploy/dingtalk-connector/README.md)：独立服务的配置与身份边界。
+- [维护检查与精简建议](docs/maintenance-review.md)：已核实的重复内容、结构问题和后续整理顺序。
+- [研究与证据记录](research/README.md)：设计来源、历史观察和验证范围。
+
+## 许可证
+
+仓库目前尚未提供 `LICENSE` 文件，许可证待维护者明确。

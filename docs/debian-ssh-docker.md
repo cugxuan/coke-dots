@@ -82,7 +82,7 @@ VITE_DOTS_DEFAULT_ENGINE=pi npm run build
 NODE_ENV=production npm start
 ```
 
-Open `http://127.0.0.1:4317`, sign in and save the shared model settings before starting a Pi task. The app defaults to loopback; LAN access is described below, and public HTTPS/reverse-proxy configuration is the same as the main README. Configure the service manager's working directory, data path and SSH credentials consistently. The controller must be running for task scheduling and browser access.
+Open `http://127.0.0.1:4317`, sign in and save the shared model settings before starting a Pi task. The app defaults to loopback; LAN and HTTPS domain access are described below. For a reverse-proxy subpath, see the [configuration guide](configuration.md#反向代理与子路径). Configure the service manager's working directory, data path and SSH credentials consistently. The controller must be running for task scheduling and browser access.
 
 ### Local administrator login without Google
 
