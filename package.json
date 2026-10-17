@@ -4,11 +4,14 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "install:web": "ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm ci",
+    "install:desktop": "npm rebuild electron",
     "dev": "concurrently -k \"tsx watch src/server/index.ts\" \"vite --host 127.0.0.1\"",
     "dev:server": "tsx watch src/server/index.ts",
     "dev:web": "vite --host 127.0.0.1",
-    "build": "tsc --noEmit && vite build",
-    "build:demo": "VITE_DOTS_DEFAULT_ENGINE=pi DOTS_PUBLIC_BASE_PATH=/dots-demo/ tsc --noEmit && VITE_DOTS_DEFAULT_ENGINE=pi DOTS_PUBLIC_BASE_PATH=/dots-demo/ vite build",
+    "check": "tsc --noEmit && tsc --project tsconfig.tools.json",
+    "build": "npm run check && vite build",
+    "build:demo": "npm run check && VITE_DOTS_DEFAULT_ENGINE=pi DOTS_PUBLIC_BASE_PATH=/dots-demo/ vite build",
     "build:linux-desktop-image": "bash scripts/build-linux-desktop-image.sh \"${DOTS_K3D_CLUSTER:-tp1121-sandbox-dev}\"",
     "build:docker-desktop-image": "bash scripts/build-docker-desktop-image.sh",
     "test": "node scripts/run-isolated-tests.mjs unit",
@@ -57,5 +60,6 @@
   "optionalDependencies": {
     "@deepseek-ai/dsh-sdk-client": "^0.1.0-rc.6",
     "@mariozechner/pi-coding-agent": "^0.73.1"
-  }
+  },
+  "license": "MIT"
 }

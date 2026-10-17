@@ -29,7 +29,7 @@ npm run build
 npm test
 ```
 
-`build` 运行 TypeScript 检查和 Vite 构建。`npm test` 使用 Node.js 测试运行器，并为凭据测试创建临时隔离存储；部分 macOS DWS 测试在其他平台明确跳过。样例 `examples/coke-agent-incident-demo/reference-repo` 包含刻意保留的故障，不属于主项目必须通过的单元测试。
+`build` 先运行 `npm run check`，检查应用、测试、Electron 和 TypeScript 脚本（包括未使用符号），再运行 Vite 构建。`npm test` 使用 Node.js 测试运行器，并为凭据测试创建临时隔离存储；部分 macOS DWS 测试在其他平台明确跳过。样例 `examples/coke-agent-incident-demo/reference-repo` 包含刻意保留的故障，不属于主项目必须通过的单元测试。
 
 | 命令 | 验证范围 / 前提 |
 | --- | --- |
@@ -49,6 +49,8 @@ npx playwright-core install ffmpeg
 
 浏览器证据写入被 Git 忽略的 `artifacts/`。测试身份仅在 `NODE_ENV=test` 且 `DOTS_E2E_AUTH=1` 时启用，仅接受 `@example.test` 账号；不得用于实际部署。真实模型和语音检查会访问外部服务并可能消耗额度，只在对应集成需要验证且具备测试凭据时运行。
 
+UI 场景按领域放在 `tests/e2e/scenarios/`，由 `tests/e2e/ui.e2e.ts` 按原顺序执行，共享同一组隔离浏览器、模拟服务与数据库。新增场景应保留跨工作区和跨功能的验证路径。
+
 现有 [CI](.github/workflows/ci.yml) 在 macOS 上运行单元测试及 `test:e2e`，不包含所有真实云端或外部服务检查。
 
 ## 代码与文档约定
@@ -58,6 +60,8 @@ npx playwright-core install ffmpeg
 - 持续保留租户、任务和会话边界，明确实例级共享的模型配置与租户数据的区别。
 - 不将演示数据或本地运行凭据混入通用逻辑。研究证据放在 `research/`，操作文档放在 `docs/`。
 - README 只保留项目介绍、最短启动路径和入口链接，详细验证记录放到对应文档或本地测试产物中。
+
+代码采用 [MIT License](LICENSE)。新增或修改第三方代码时保留其版权声明和许可证。
 
 ## 部署验证
 

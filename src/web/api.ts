@@ -29,3 +29,10 @@ export function appWebSocketUrl(path: string) {
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
   return url.toString();
 }
+
+export async function request(path: string, method: 'POST' | 'PATCH', body: object) {
+  const response = await appFetch(`/api${path}`, { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+  return data;
+}

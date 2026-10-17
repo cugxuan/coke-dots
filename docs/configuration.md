@@ -110,6 +110,8 @@ Google 登录时需登记上述回调；访问密钥登录保留 `DOTS_AUTH_MODE
 
 ## Electron 桌面外壳
 
+默认 `npm ci` 会安装 Electron 二进制。仅运行 Web 服务可使用 `npm run install:web` 跳过该下载；切换到桌面开发前运行 `npm run install:desktop` 补装。轻量安装仍保留所有其他依赖和可选 Agent SDK。
+
 macOS 上运行 `npm run desktop` 会构建前端、服务端与 Electron 外壳，按需启动独立的本地服务。关闭窗口后服务仍会运行。开发时可使用 `npm run dev:desktop`。
 
 这是开发构建，不是签名安装包。仍需 Node.js 24 和前述登录配置。Electron 自行启动服务时，未指定 `DOTS_DATA_DIR` 会使用 Electron 用户数据目录；复用已有服务时则使用该服务的数据目录。

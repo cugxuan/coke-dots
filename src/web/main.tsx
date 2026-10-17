@@ -1,19 +1,9 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { selectableEngines, type AttachmentSummary, type DotAppearance, type Engine, type Entry, type PageActionApproval, type ScheduleSpec, type Snapshot, type Task, type TaskEngine, type TaskStatus, type VoiceCallSession } from '../shared/types.ts';
+import { selectableEngines, type AttachmentSummary, type DotAppearance, type Engine, type Entry, type ScheduleSpec, type Snapshot, type Task, type VoiceCallSession } from '../shared/types.ts';
 import { engineAvailabilityHint } from '../shared/engine-availability.ts';
-import { appFetch } from './api.ts';
-import './style.css';
-import './chat-theme.css';
-import './watch.css';
-import './dark-theme.css';
-import './avatar-editor.css';
-import './onboarding.css';
-import './notification.css';
-import './activity.css';
-import './scheduled.css';
-import './recurrence.css';
-import './pages.css';
+import { appFetch, request } from './api.ts';
+import './base.css';
 import { ComputerView } from './ComputerView.tsx';
 import { TaskArtifacts } from './TaskArtifacts.tsx';
 import { DotContextPanel } from './DotContextPanel.tsx';
@@ -22,13 +12,12 @@ import { DingTalkSetupModal } from './DingTalkSetupModal.tsx';
 import { appPath } from './api.ts';
 import { ScheduledView } from './ScheduledView.tsx';
 import { PagePane, PagesView, ScratchpadNavigationPane } from './Pages.tsx';
-import { PermissionRules } from './PermissionRules.tsx';
+import './permission-rules.css';
 import { DotOnboarding } from './DotOnboarding.tsx';
 import { DotAvatar } from './DotAvatar.tsx';
 import { DotAvatarEditor } from './DotAvatarEditor.tsx';
 import { DotSetupEditor } from './DotSetupEditor.tsx';
 import { DotComputerChoice } from './DotComputerChoice.tsx';
-import { DotMemoryManager } from './DotMemoryManager.tsx';
 import { VoiceCall } from './VoiceCall.tsx';
 import { DictationButton } from './DictationButton.tsx';
 import './shell-replica.css';
@@ -36,45 +25,22 @@ import './onboarding-replica.css';
 import './computer-choice.css';
 import './call-timeline.css';
 import './mobile-replica.css';
+import { MessageBody } from './MessageBody.tsx';
+import { LoginScreen } from './LoginScreen.tsx';
+import { ActivityView } from './ActivityView.tsx';
+import { WorkspaceSwitcher } from './WorkspaceSwitcher.tsx';
+import { RecurrenceEditor } from './RecurrenceEditor.tsx';
+import { TaskControls } from './TaskControls.tsx';
+import { Profile } from './Profile.tsx';
+import { engineText, type AuthContext, type WorkspaceInvitation } from './ui-types.ts';
 
 const initial: Snapshot = { profile: { name: 'Dot', shape: 'circle', color: '#c8cbd5', eyes: 'dot', glasses: 'none', accessory: 'none', character: 'ring', pet: 'moss', avatarSetupCompletedAt: null, onboardingCompletedAt: null, onboardingCompletedName: null }, preferences: { desktopNotifications: false }, computerAccess: { dotComputer: true, localComputer: true, configured: false }, tasks: [], watches: [], entries: [], configured: false, availableEngines: [], remoteEngines: [], modelSettings: { baseUrl: '', model: '', hasKey: false, adminTenantId: null, apiKeyStatus: 'missing' } };
-interface AuthContext { user: { id: string; email: string; name: string }; tenant: { id: string; name: string; role: string; kind: string }; tenants: { id: string; name: string; role: string; kind: string }[] }
 type Theme = 'light' | 'dark';
-interface TenantMember { id: string; email: string; name: string; role: string }
-interface WorkspaceInvitation { tenantId: string; tenantName?: string; email: string; role: string; invitedAt: string; expiresAt: string }
-interface TenantMemory { id: string; tenantId: string; note: string; createdBy: string; createdByName: string; createdAt: string; updatedAt: string }
 type ChatTimelineItem =
   | { id: string; at: string; source: 'entry'; entry: Entry }
   | { id: string; at: string; source: 'call-ended'; call: VoiceCallSession };
-const statusText: Record<TaskStatus, string> = {
-  queued: '排队中', working: '工作中', delegating: '并行处理中', waiting: '等待你', scheduled: '已安排', done: '已完成', failed: '失败', paused: '已暂停', stopped: '已停止',
-};
-const engineText: Record<TaskEngine, string> = { model: '模型 API', claude: 'Claude Code（已停用）', pi: 'Pi', dsh: 'DeepSeek Harness' };
 const buildDefaultEngine = import.meta.env.VITE_DOTS_DEFAULT_ENGINE;
 const defaultEngine: Engine = buildDefaultEngine === 'pi' || buildDefaultEngine === 'dsh' || buildDefaultEngine === 'model' ? buildDefaultEngine : 'model';
-
-async function request(path: string, method: 'POST' | 'PATCH', body: object) {
-  const response = await appFetch(`/api${path}`, { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-  return data;
-}
-
-function MessageBody({ body, onOpenPage }: { body: string; onOpenPage: (id: string) => void }) {
-  const token = /\[\[page:([a-f0-9-]{36})\|([^\]]+)\]\]/gi;
-  const content: React.ReactNode[] = [];
-  let cursor = 0;
-  for (const match of body.matchAll(token)) {
-    const index = match.index ?? 0;
-    if (index > cursor) content.push(<React.Fragment key={`text-${cursor}`}>{body.slice(cursor, index)}</React.Fragment>);
-    let title = match[2];
-    try { title = decodeURIComponent(match[2]); } catch { /* Preserve malformed display text safely. */ }
-    content.push(<button key={`page-${match[1]}`} className="message-page-link" onClick={() => onOpenPage(match[1])}>{title} ↗</button>);
-    cursor = index + match[0].length;
-  }
-  if (cursor < body.length) content.push(<React.Fragment key={`text-${cursor}`}>{body.slice(cursor)}</React.Fragment>);
-  return <p className="message-body">{content}</p>;
-}
 
 function App() {
   const [authContext, setAuthContext] = useState<AuthContext | null>(null);
@@ -241,7 +207,6 @@ function App() {
     return items.sort((left, right) => Date.parse(left.at) - Date.parse(right.at) || left.id.localeCompare(right.id));
   }, [entries, selected, currentVoiceCalls]);
   const hasConversationHistory = entries.length > 0 || timelineItems.some(item => item.source === 'call-ended');
-  const active = state.tasks.filter(t => ['queued', 'working', 'waiting', 'scheduled'].includes(t.status));
 
   useLayoutEffect(() => { timelineAtBottomRef.current = true; }, [view, selected]);
   useLayoutEffect(() => {
@@ -515,401 +480,6 @@ function App() {
     }} />}
     {dingtalkModalOpen && authContext && <DingTalkSetupModal onClose={() => setDingtalkModalOpen(false)} onOpenIncident={taskId => { setDingtalkModalOpen(false); setSelected(taskId); setSelectedPageId(null); setView('chat'); }} />}
   </div>;
-}
-
-function LoginScreen({ googleConfigured, localAuthAvailable, e2eAuthAvailable }: { googleConfigured: boolean; localAuthAvailable: boolean; e2eAuthAvailable: boolean }) {
-  const [desktopPending, setDesktopPending] = useState(false);
-  const [desktopError, setDesktopError] = useState('');
-  const [e2eEmail, setE2eEmail] = useState('alpha@example.test');
-  const [localToken, setLocalToken] = useState('');
-  const isElectron = /Electron/i.test(navigator.userAgent);
-  const authError = new URLSearchParams(window.location.search).get('authError');
-  const authErrors: Record<string, string> = { cancelled: '你取消了登录。', expired: '登录请求已过期，请重试。', invalid: '登录返回信息无效。', invalid_identity: 'Google 身份验证未通过。', missing_identity: 'Google 没有返回身份令牌。', sign_in_failed: 'Google 登录失败，请检查配置后重试。' };
-  async function beginDesktopLogin() {
-    setDesktopError(''); setDesktopPending(true);
-    const random = new Uint8Array(32); crypto.getRandomValues(random);
-    const handoffToken = Array.from(random, byte => byte.toString(16).padStart(2, '0')).join('');
-    const authorization = new URL(appPath('/api/auth/desktop/start'), window.location.href);
-    authorization.searchParams.set('handoffToken', handoffToken);
-    const popup = window.open(authorization.toString(), '_blank');
-    if (!popup && !isElectron) { setDesktopPending(false); setDesktopError('浏览器阻止了登录窗口，请允许弹出窗口后重试。'); return; }
-    try {
-      const deadline = Date.now() + 10 * 60_000;
-      while (Date.now() < deadline) {
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        const response = await appFetch('/api/auth/desktop/poll', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ handoffToken }) });
-        const data = await response.json();
-        if (response.status === 202) continue;
-        if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-        window.location.reload();
-        return;
-      }
-      throw new Error('登录等待超时，请重试。');
-    } catch (error) { setDesktopError(error instanceof Error ? error.message : String(error)); }
-    finally { setDesktopPending(false); }
-  }
-  async function signInE2e() {
-    setDesktopError('');
-    try {
-      const response = await appFetch('/api/auth/e2e/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ email: e2eEmail }) });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-      window.location.reload();
-    } catch (error) { setDesktopError(error instanceof Error ? error.message : String(error)); }
-  }
-  async function signInLocal() {
-    setDesktopError(''); setDesktopPending(true);
-    try {
-      const response = await appFetch('/api/auth/local/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ token: localToken }) });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-      setLocalToken('');
-      window.location.reload();
-    } catch (error) { setDesktopError(error instanceof Error ? error.message : String(error)); }
-    finally { setDesktopPending(false); }
-  }
-  return <main className="auth-page"><div className="auth-card">
-    <div className="brand"><span className="brand-mark">●</span> Coke Dots</div>
-    <h1>让你的个人代理持续推进工作</h1>
-    <p>{localAuthAvailable ? '输入访问密钥，进入本机管理员工作区。' : '使用 Google 账号登录。'}任务、记录和浏览器会话按工作区隔离；模型 API 由 Coke Dots 实例统一配置。</p>
-    {authError && <div className="auth-error">{authErrors[authError] || '登录失败，请重试。'}</div>}
-    {desktopError && <div className="auth-error" role="alert">{desktopError}</div>}
-    {localAuthAvailable ? <form className="local-login" onSubmit={event => { event.preventDefault(); void signInLocal(); }}>
-      <label htmlFor="local-access-token">访问密钥</label>
-      <input id="local-access-token" type="password" autoComplete="current-password" required value={localToken} onChange={event => setLocalToken(event.target.value)} />
-      <button className="google-login" disabled={desktopPending || !localToken}>{desktopPending ? '正在登录…' : '进入本机工作区'}</button>
-    </form> : googleConfigured ? isElectron ? <button className="google-login" disabled={desktopPending} onClick={() => void beginDesktopLogin()}><span>G</span>{desktopPending ? '等待浏览器完成登录…' : '使用 Google 登录'}</button> : <a className="google-login" href={appPath('/api/auth/google/start')}><span>G</span>使用 Google 登录</a> : <div className="auth-setup"><strong>需要配置 Google OAuth</strong><span>在本机服务环境中设置 GOOGLE_CLIENT_ID 和 GOOGLE_CLIENT_SECRET，然后重启服务。</span></div>}
-    {e2eAuthAvailable && <div className="e2e-login"><label htmlFor="e2e-email">E2E 测试账号</label><input id="e2e-email" type="email" value={e2eEmail} onChange={event => setE2eEmail(event.target.value)} /><button data-testid="e2e-sign-in" className="google-login" onClick={() => void signInE2e()}>测试环境登录</button></div>}
-    <small>{localAuthAvailable ? '访问密钥由本机部署管理员提供。模型 API 密钥请在登录后的设置中填写。' : '仅申请基本身份信息；Coke Dots 不会取得 Gmail 或 Google Drive 权限。'}</small>
-  </div></main>;
-}
-
-function ActivityView({ tenantId, profileName, state, stateLoaded, onSelectTask, onOpenPage }: { tenantId: string; profileName: string; state: Snapshot; stateLoaded: boolean; onSelectTask: (taskId: string) => void; onOpenPage: (pageId: string, taskId?: string | null) => void }) {
-  const tenantIdRef = useRef(tenantId);
-  tenantIdRef.current = tenantId;
-  const pageGeneration = useRef(0);
-  const [entries, setEntries] = useState<Entry[]>([]);
-  const [nextCursor, setNextCursor] = useState<number | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [loadingOlder, setLoadingOlder] = useState(false);
-  const [error, setError] = useState('');
-  const [refreshKey, setRefreshKey] = useState(0);
-
-  useEffect(() => {
-    const generation = ++pageGeneration.current;
-    let current = true;
-    setLoading(true); setLoadingOlder(false); setError(''); setEntries([]); setNextCursor(null);
-    void appFetch('/api/activity?limit=50').then(async response => {
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-      return data as { entries: Entry[]; nextCursor: number | null };
-    }).then(page => { if (current && generation === pageGeneration.current) { setEntries(page.entries); setNextCursor(page.nextCursor); } })
-      .catch(reason => { if (current) setError(reason instanceof Error ? reason.message : String(reason)); })
-      .finally(() => { if (current && generation === pageGeneration.current) setLoading(false); });
-    return () => { current = false; };
-  }, [tenantId, refreshKey]);
-
-  useEffect(() => {
-    if (loading || !state.entries.length) return;
-    const oldestSnapshotEntryId = Math.min(...state.entries.map(entry => entry.id));
-    setEntries(current => {
-      const byId = new Map(current.map(entry => [entry.id, entry]));
-      for (const entry of state.entries) byId.set(entry.id, entry);
-      return [...byId.values()].sort((a, b) => b.id - a.id);
-    });
-    setNextCursor(current => state.entries.length < 150 ? null : current === null ? null : Math.min(current, oldestSnapshotEntryId));
-  }, [state.entries, loading]);
-
-  async function loadOlder() {
-    if (nextCursor === null || loadingOlder) return;
-    const requestedTenantId = tenantIdRef.current;
-    const generation = pageGeneration.current;
-    setLoadingOlder(true); setError('');
-    try {
-      const response = await appFetch(`/api/activity?limit=50&before=${nextCursor}`);
-      const data = await response.json() as { entries?: Entry[]; nextCursor?: number | null; error?: string };
-      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-      if (requestedTenantId !== tenantIdRef.current || generation !== pageGeneration.current) return;
-      setEntries(current => {
-        const byId = new Map(current.map(entry => [entry.id, entry]));
-        for (const entry of data.entries || []) byId.set(entry.id, entry);
-        return [...byId.values()].sort((a, b) => b.id - a.id);
-      });
-      setNextCursor(data.nextCursor ?? null);
-    } catch (reason) { if (requestedTenantId === tenantIdRef.current && generation === pageGeneration.current) setError(reason instanceof Error ? reason.message : String(reason)); }
-    finally { if (requestedTenantId === tenantIdRef.current && generation === pageGeneration.current) setLoadingOlder(false); }
-  }
-
-  const tasks = new Map(state.tasks.map(task => [task.id, task]));
-  const childrenByParent = new Map<string, Task[]>();
-  for (const task of state.tasks) if (task.parentTaskId) childrenByParent.set(task.parentTaskId, [...(childrenByParent.get(task.parentTaskId) || []), task]);
-  const activityTasks = state.tasks.filter(task => !task.parentTaskId).flatMap(task => [task, ...(childrenByParent.get(task.id) || [])]);
-  return <section className="content activity-content">
-    <div className="section-heading"><h1>Activity</h1><p>查看 dot 正在处理的工作、结果和需要你决定的事项。</p></div>
-    <div className="cards">{!stateLoaded ? <div className="empty workspace-loading" role="status">正在加载工作区…</div> : !state.tasks.length ? <div className="empty">还没有任务。回到对话，交给 dot 第一项工作。</div> : activityTasks.map(task => {
-      const parent = task.parentTaskId ? tasks.get(task.parentTaskId) : undefined;
-      const children = childrenByParent.get(task.id) || [];
-      const terminalChildren = children.filter(child => ['done', 'failed', 'stopped'].includes(child.status)).length;
-      const description = task.parentTaskId ? task.error || task.result || task.instruction
-        : task.status === 'delegating' ? `${terminalChildren}/${children.length} 项子任务已结束。${task.result ? ` ${task.result}` : ''}`
-          : task.error || task.result || task.instruction;
-      return <div className={`task-card ${task.parentTaskId ? 'delegated-child' : ''}`} data-testid={`task-card-${task.id}`} key={task.id}>
-      <div className="task-card-head"><span className={`pill ${task.status}`}>{statusText[task.status]}</span><time>{new Date(task.updatedAt).toLocaleString('zh-CN')}</time></div>
-      {parent && <small className="delegated-from">委派自：{parent.title} · 内核：{engineText[task.engine]}</small>}
-      <h2>{task.title}</h2><p>{description}</p>
-      <div className="card-actions"><button onClick={() => onSelectTask(task.id)}>查看详情 →</button><TaskControls task={task} act={async (item, action, extra) => { try { await request(`/tasks/${item.id}`, 'PATCH', { action, ...extra }); } catch (reason) { setError(String(reason)); } }} compact /></div>
-    </div>})}</div>
-    <section className="activity-feed" data-testid="activity-feed" aria-label="Recent activity">
-      <header><div><h2>Recent activity</h2><p>任务进度、用户方向和执行记录</p></div><button onClick={() => setRefreshKey(value => value + 1)} disabled={loading}>刷新</button></header>
-      {error && <p className="activity-error" role="alert">{error}</p>}
-      {loading ? <p className="activity-empty" role="status">正在加载活动记录…</p> : !entries.length ? <p className="activity-empty">还没有活动记录。</p> : <ol className="activity-list">{entries.map(entry => {
-        const task = entry.taskId ? tasks.get(entry.taskId) : undefined;
-        return <li className={`activity-entry ${entry.kind}`} data-testid="activity-entry" key={entry.id}>
-          <div className="activity-entry-head"><strong>{entry.kind === 'user' ? '你' : entry.kind === 'dot' ? profileName : '系统'}</strong><time>{new Date(entry.createdAt).toLocaleString('zh-CN')}</time></div>
-          <MessageBody body={entry.body} onOpenPage={pageId => onOpenPage(pageId, entry.taskId)} />
-          {task && <button className="activity-open-task" onClick={() => onSelectTask(task.id)}>打开任务：{task.title} →</button>}
-        </li>;
-      })}</ol>}
-      {nextCursor !== null && <button className="activity-load-older" onClick={() => void loadOlder()} disabled={loadingOlder}>{loadingOlder ? '正在加载…' : '加载更早记录'}</button>}
-    </section>
-  </section>;
-}
-
-function WorkspaceSwitcher({ auth, onSwitch, onCreate, onError }: { auth: AuthContext; onSwitch: (id: string) => Promise<void>; onCreate: (name: string) => Promise<void>; onError: (message: string) => void }) {
-  const [name, setName] = useState('');
-  const [creating, setCreating] = useState(false);
-  return <div className="workspace-switcher"><label><span>工作区</span><select value={auth.tenant.id} onChange={event => void onSwitch(event.target.value)}>{auth.tenants.map(tenant => <option key={tenant.id} value={tenant.id}>{tenant.name} · {tenant.role}</option>)}</select></label>{creating ? <form onSubmit={event => { event.preventDefault(); void onCreate(name.trim()).then(() => { setName(''); setCreating(false); }).catch(error => onError(String(error))); }}><input aria-label="新工作区名称" autoFocus maxLength={60} value={name} onChange={event => setName(event.target.value)} placeholder="工作区名称" /><button disabled={!name.trim()}>创建</button><button type="button" onClick={() => setCreating(false)}>取消</button></form> : <button className="new-workspace" onClick={() => setCreating(true)}>＋ 新建工作区</button>}</div>;
-}
-
-function RecurrenceEditor({ frequency, setFrequency, minutes, setMinutes, time, setTime, timeZone, setTimeZone, weekdays, setWeekdays, endDate, setEndDate }: {
-  frequency: 'interval' | 'daily' | 'weekly';
-  setFrequency: React.Dispatch<React.SetStateAction<'interval' | 'daily' | 'weekly'>>;
-  minutes: number; setMinutes: React.Dispatch<React.SetStateAction<number>>;
-  time: string; setTime: React.Dispatch<React.SetStateAction<string>>;
-  timeZone: string; setTimeZone: React.Dispatch<React.SetStateAction<string>>;
-  weekdays: number[]; setWeekdays: React.Dispatch<React.SetStateAction<number[]>>;
-  endDate: string; setEndDate: React.Dispatch<React.SetStateAction<string>>;
-}) {
-  const zones = useMemo(() => {
-    const supported = typeof Intl.supportedValuesOf === 'function' ? Intl.supportedValuesOf('timeZone') : [];
-    return [...new Set(['UTC', timeZone, ...supported])].sort();
-  }, [timeZone]);
-  const dayLabels = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
-  return <div className="schedule-details" data-testid="schedule-details">
-    <label>频率<select aria-label="重复频率" value={frequency} onChange={event => setFrequency(event.target.value as 'interval' | 'daily' | 'weekly')}><option value="interval">按间隔</option><option value="daily">每天</option><option value="weekly">每周</option></select></label>
-    {frequency === 'interval' ? <label>每 <input aria-label="间隔分钟数" className="minutes" type="number" min="1" max="10080" value={minutes} onChange={event => setMinutes(Number(event.target.value))} /> 分钟</label> : <>
-      <label>时间<input aria-label="定时时间" type="time" value={time} onChange={event => setTime(event.target.value)} /></label>
-      <label>时区<select aria-label="时区" value={timeZone} onChange={event => setTimeZone(event.target.value)}>{zones.map(zone => <option key={zone} value={zone}>{zone}</option>)}</select></label>
-      {frequency === 'weekly' && <fieldset className="schedule-weekdays"><legend>重复日</legend>{dayLabels.map((label, day) => <label key={day}><input aria-label={label} type="checkbox" checked={weekdays.includes(day)} onChange={event => setWeekdays(current => event.target.checked ? [...current, day] : current.filter(value => value !== day))} />{label.slice(2)}</label>)}</fieldset>}
-      <label>结束日期（可选）<input aria-label="结束日期" type="date" value={endDate} onChange={event => setEndDate(event.target.value)} /></label>
-    </>}
-  </div>;
-}
-
-function TaskControls({ task, act, compact = false }: { task: Task; act: (task: Task, action: string, extra?: object) => Promise<void>; compact?: boolean }) {
-  const [redirect, setRedirect] = useState('');
-  const [approval, setApproval] = useState<PageActionApproval | null>(null);
-  const [approvalLoaded, setApprovalLoaded] = useState(false);
-  const [approvalBusy, setApprovalBusy] = useState(false);
-  const [approvalError, setApprovalError] = useState('');
-  useEffect(() => {
-    let active = true;
-    setApproval(null); setApprovalLoaded(false); setApprovalError('');
-    if (compact || task.status !== 'waiting') { setApprovalLoaded(true); return () => { active = false; }; }
-    void appFetch(`/api/tasks/${task.id}/approval`).then(async response => {
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-      if (active) setApproval(data as PageActionApproval | null);
-    }).catch(reason => { if (active) setApprovalError(reason instanceof Error ? reason.message : String(reason)); })
-      .finally(() => { if (active) setApprovalLoaded(true); });
-    return () => { active = false; };
-  }, [task.id, task.status, compact]);
-  async function decideApproval(decision: 'approve' | 'decline') {
-    setApprovalBusy(true); setApprovalError('');
-    try {
-      const result = await request(`/tasks/${task.id}/approval`, 'POST', { decision }) as { approval: PageActionApproval };
-      setApproval(result.approval);
-    } catch (reason) { setApprovalError(reason instanceof Error ? reason.message : String(reason)); }
-    finally { setApprovalBusy(false); }
-  }
-  const hasRecurringSchedule = Boolean(task.scheduleSpec || task.scheduleMinutes !== null);
-  const canStop = !hasRecurringSchedule && ['queued', 'working', 'delegating', 'waiting', 'scheduled', 'paused'].includes(task.status);
-  return <div className={`task-controls ${compact ? 'compact' : ''}`}>
-    {!compact && <span className={`pill ${task.status}`}>{statusText[task.status]}</span>}
-    {!hasRecurringSchedule && ['working', 'queued', 'delegating', 'scheduled'].includes(task.status) && <button onClick={() => void act(task, 'pause')}>暂停</button>}
-    {['paused', 'failed'].includes(task.status) && <button onClick={() => void act(task, task.status === 'failed' ? 'retry' : 'resume')}>{task.status === 'failed' ? '重试' : '继续'}</button>}
-    {canStop && <button className="stop-task" title="停止后这项工作不能继续" onClick={() => void act(task, 'stop')}>停止工作</button>}
-    {!compact && <>
-      {task.status !== 'stopped' && <button onClick={() => void act(task, 'priority', { priority: task.priority + 1 })}>提高优先级</button>}
-      {task.status === 'waiting' && !approvalLoaded && <small role="status" className="approval-loading">正在读取待审批操作…</small>}
-      {approval?.status === 'pending' && <div className="page-approval" data-testid="page-action-approval">
-        <div className="page-approval-heading"><strong>Scratchpad 页面写入等待批准</strong><small>批准后才会保存到当前工作区。</small></div>
-        <div className="page-approval-proposal"><strong>{approval.action.action === 'create' ? '创建' : '更新'}：{approval.action.title}</strong><p>{approval.message}</p><pre>{approval.action.content}</pre></div>
-        {approvalError && <small role="alert" className="approval-error">{approvalError}</small>}
-        <div className="page-approval-actions"><button className="approve" disabled={approvalBusy} onClick={() => void decideApproval('approve')}>{approvalBusy ? '处理中…' : '批准并执行'}</button><button disabled={approvalBusy} onClick={() => void decideApproval('decline')}>拒绝并保持不变</button></div>
-      </div>}
-      {approvalLoaded && !approval && task.status !== 'stopped' && <div className="redirect">
-        <input aria-label={task.status === 'waiting' ? '回复 dot 的问题' : '调整这项工作的要求'} value={redirect} onChange={e => setRedirect(e.target.value)} placeholder={task.status === 'waiting' ? '回复 dot 的问题…' : '调整这项工作的要求'} />
-        <button disabled={!redirect.trim()} onClick={() => {
-          const action = task.status === 'waiting' ? 'reply' : 'redirect';
-          const extra = task.status === 'waiting' ? { message: redirect } : { instruction: redirect };
-          void act(task, action, extra);
-          setRedirect('');
-        }}>{task.status === 'waiting' ? '回复并继续' : '更新'}</button>
-      </div>}
-    </>}
-  </div>;
-}
-
-function Profile({ state, auth, onError, onEditAppearance, onManageComputerAccess, onStartCall }: { state: Snapshot; auth: AuthContext; onError: (s: string) => void; onEditAppearance: () => void; onManageComputerAccess: () => void; onStartCall: () => void }) {
-  const [name, setName] = useState(state.profile.name);
-  const [baseUrl, setBaseUrl] = useState(state.modelSettings.baseUrl || 'https://api.openai.com/v1');
-  const [model, setModel] = useState(state.modelSettings.model);
-  const [apiKey, setApiKey] = useState('');
-  const [desktopNotifications, setDesktopNotifications] = useState(state.preferences.desktopNotifications);
-  const [notificationBusy, setNotificationBusy] = useState(false);
-  const [memberEmail, setMemberEmail] = useState('');
-  const [members, setMembers] = useState<TenantMember[]>([]);
-  const [invitations, setInvitations] = useState<WorkspaceInvitation[]>([]);
-  const [memberNotice, setMemberNotice] = useState('');
-  const [membersError, setMembersError] = useState('');
-  const [memories, setMemories] = useState<TenantMemory[]>([]);
-  const [memoryDraft, setMemoryDraft] = useState('');
-  const [editingMemory, setEditingMemory] = useState<string | null>(null);
-  const [editingDraft, setEditingDraft] = useState('');
-  const [memoryError, setMemoryError] = useState('');
-  const [memoryBusy, setMemoryBusy] = useState(false);
-  const canManageSharedModel = ['owner', 'admin'].includes(auth.tenant.role)
-    && (!state.modelSettings.adminTenantId || state.modelSettings.adminTenantId === auth.tenant.id);
-  const refreshMembers = async () => {
-    const response = await appFetch(`/api/tenants/${auth.tenant.id}/members`);
-    if (!response.ok) throw new Error((await response.json()).error || `HTTP ${response.status}`);
-    setMembers(await response.json() as TenantMember[]);
-    if (['owner', 'admin'].includes(auth.tenant.role)) {
-      const inviteResponse = await appFetch(`/api/tenants/${auth.tenant.id}/invitations`);
-      if (!inviteResponse.ok) throw new Error((await inviteResponse.json()).error || `HTTP ${inviteResponse.status}`);
-      setInvitations(await inviteResponse.json() as WorkspaceInvitation[]);
-    } else setInvitations([]);
-  };
-  useEffect(() => { setName(state.profile.name); }, [state.profile.name]);
-  useEffect(() => { setDesktopNotifications(state.preferences.desktopNotifications); }, [state.preferences.desktopNotifications]);
-  useEffect(() => { if (state.modelSettings.baseUrl) setBaseUrl(state.modelSettings.baseUrl); if (state.modelSettings.model) setModel(state.modelSettings.model); }, [state.modelSettings.baseUrl, state.modelSettings.model]);
-  useEffect(() => { void refreshMembers().catch(error => setMembersError(String(error))); }, [auth.tenant.id]);
-  useEffect(() => {
-    let active = true;
-    setMemoryDraft(''); setEditingMemory(null); setEditingDraft(''); setMemoryError(''); setMemories([]);
-    void appFetch('/api/memories').then(async response => {
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-      if (active) setMemories(data as TenantMemory[]);
-    }).catch(error => { if (active) setMemoryError(String(error)); });
-    return () => { active = false; };
-  }, [auth.tenant.id]);
-  async function addMemory() {
-    setMemoryBusy(true); setMemoryError('');
-    try {
-      const memory = await request('/memories', 'POST', { note: memoryDraft }) as TenantMemory;
-      setMemories(current => [memory, ...current]); setMemoryDraft('');
-    } catch (error) { setMemoryError(String(error)); }
-    finally { setMemoryBusy(false); }
-  }
-  async function saveMemory(memory: TenantMemory) {
-    setMemoryBusy(true); setMemoryError('');
-    try {
-      const updated = await request(`/memories/${memory.id}`, 'PATCH', { note: editingDraft }) as TenantMemory;
-      setMemories(current => current.map(item => item.id === updated.id ? updated : item)); setEditingMemory(null); setEditingDraft('');
-    } catch (error) { setMemoryError(String(error)); }
-    finally { setMemoryBusy(false); }
-  }
-  async function removeMemory(memory: TenantMemory) {
-    setMemoryBusy(true); setMemoryError('');
-    try {
-      const response = await appFetch(`/api/memories/${memory.id}`, { method: 'DELETE' });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-      setMemories(current => current.filter(item => item.id !== memory.id));
-    } catch (error) { setMemoryError(String(error)); }
-    finally { setMemoryBusy(false); }
-  }
-  return <section className="content profile-content">
-    <div className="section-heading"><h1>你的 dot</h1><p>给它起个名字，选择一个外观。</p></div>
-    <div className="profile-card">
-      <DotAvatar appearance={state.profile} />
-      <button type="button" className="primary" data-testid="profile-voice-call-launch" aria-label={`拨打 ${state.profile.name}`} onClick={onStartCall}>拨打 {state.profile.name}</button>
-      <button type="button" className="avatar-profile-customize" onClick={onEditAppearance}>Customize your dot</button>
-      <label>名字<input maxLength={40} value={name} onChange={e => setName(e.target.value)} /></label>
-      <button className="primary" onClick={async () => { try { await request('/profile', 'PATCH', { name }); } catch (e) { onError(String(e)); } }}>保存更改</button>
-    </div>
-    <div className="section-heading model-heading"><h2>电脑访问</h2><p>管理 Dot 是否可以使用本机上的隔离 Chrome 工作区。</p></div>
-    <div className="profile-card model-card computer-access-card">
-      <p>{state.computerAccess.localComputer ? '已允许 Dot 使用本机隔离 Chrome 工作区。' : '已关闭本机 Chrome 工作区访问。'}</p>
-      <small>当前版本不连接 Mac 文件或其他应用。</small>
-      <button className="primary" disabled={!['owner', 'admin'].includes(auth.tenant.role)} onClick={onManageComputerAccess}>更改电脑访问</button>
-      {!['owner', 'admin'].includes(auth.tenant.role) && <small>只有工作区所有者或管理员可以更改此设置。</small>}
-    </div>
-    <div className="section-heading model-heading"><h2>通知</h2><p>后台工作需要你处理或完成时，在这台 Mac 上提醒你。</p></div>
-    <div className="profile-card model-card notification-card">
-      <label className="notification-toggle"><input aria-label="桌面通知" type="checkbox" checked={desktopNotifications} disabled={notificationBusy} onChange={async event => { const enabled = event.currentTarget.checked; setNotificationBusy(true); setDesktopNotifications(enabled); try { await request('/preferences', 'PATCH', { desktopNotifications: enabled }); } catch (error) { setDesktopNotifications(!enabled); onError(String(error)); } finally { setNotificationBusy(false); } }} /><span><strong>桌面通知</strong><small>{desktopNotifications ? '此工作区已开启任务和网页监控提醒。' : '此工作区的提醒目前关闭。'}</small></span></label>
-      <small className="notification-note">通知只显示 Dot 名称和事项状态，不包含任务结果正文。</small>
-    </div>
-    <DotMemoryManager key={`${auth.tenant.id}:${auth.user.id}`} tenantId={auth.tenant.id} userId={auth.user.id} />
-    <div className="section-heading model-heading"><h2>工作区记忆</h2><p>你明确保存的偏好、决定和背景会提供给此工作区中的 Dot 任务。成员可查看；创建者和管理员可编辑或删除。不会自动从聊天中提取。</p></div>
-    <div className="profile-card model-card memory-card" data-testid="memory-manager">
-      <div className="memory-list" aria-label="已保存的工作区记忆">
-        {memories.map(memory => {
-          const canManage = memory.createdBy === auth.user.id || ['owner', 'admin'].includes(auth.tenant.role);
-          return <article className="memory-row" data-testid="memory-row" key={memory.id}>
-            {editingMemory === memory.id ? <>
-              <label>编辑这条记忆<textarea aria-label="编辑这条记忆" maxLength={1000} value={editingDraft} onChange={event => setEditingDraft(event.target.value)} /></label>
-              <div className="memory-actions"><button className="primary" disabled={memoryBusy || !editingDraft.trim()} onClick={() => void saveMemory(memory)}>保存记忆</button><button disabled={memoryBusy} onClick={() => { setEditingMemory(null); setEditingDraft(''); }}>取消</button></div>
-            </> : <>
-              <p>{memory.note}</p><small>由 {memory.createdByName} 保存</small>
-              {canManage && <div className="memory-actions"><button aria-label={`编辑记忆：${memory.note}`} disabled={memoryBusy} onClick={() => { setEditingMemory(memory.id); setEditingDraft(memory.note); }}>编辑</button><button aria-label={`删除记忆：${memory.note}`} disabled={memoryBusy} onClick={() => void removeMemory(memory)}>删除</button></div>}
-            </>}
-          </article>;
-        })}
-        {memories.length === 0 && <small data-testid="empty-memory-list">还没有保存的记忆。</small>}
-      </div>
-      <label>添加一条 Dot 应记住的信息<textarea aria-label="添加记忆" maxLength={1000} value={memoryDraft} onChange={event => setMemoryDraft(event.target.value)} placeholder="例如：回答时优先使用中文，日期按北京时间表达。" /></label>
-      <button className="primary" disabled={memoryBusy || !memoryDraft.trim() || memories.length >= 20} onClick={() => void addMemory()}>添加记忆</button>
-      <small>每个工作区最多 20 条，每条最多 1000 个字符。</small>
-      {memoryError && <small role="alert" className="member-error">{memoryError}</small>}
-    </div>
-    <PermissionRules tenantId={auth.tenant.id} role={auth.tenant.role} />
-    <div className="section-heading model-heading"><h2>工作区成员</h2><p>所有成员都必须使用对应 Google 账号登录并接受邀请后才能访问。邀请 7 天后过期；Coke Dots 不会代发邮件，请通过其他方式通知对方。当前角色：{auth.tenant.role}。</p></div>
-    <div className="profile-card model-card">
-      <div className="member-list">{members.map(member => <div className="member-row" key={member.id}>
-        <span><strong>{member.name}</strong><small>{member.email}</small></span>
-        <span className="member-role">{member.role === 'owner' ? '所有者' : member.role === 'admin' ? '管理员' : '成员'}</span>
-        {['owner', 'admin'].includes(auth.tenant.role) && member.role !== 'owner' && <button onClick={async () => { try { const response = await appFetch(`/api/tenants/${auth.tenant.id}/members/${member.id}`, { method: 'DELETE' }); const data = await response.json(); if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`); await refreshMembers(); } catch (error) { setMembersError(String(error)); } }}>移除</button>}
-      </div>)}</div>
-      {invitations.length > 0 && <div className="member-invitations" role="region" aria-label="待接受邀请"><strong>待接受邀请</strong>{invitations.map(invitation => <div className="member-row pending-invitation" key={invitation.email}>
-        <span><strong>{invitation.email}</strong><small>有效期至 {new Date(invitation.expiresAt).toLocaleDateString('zh-CN')}</small></span>
-        <span className="member-role">{invitation.role === 'admin' ? '管理员' : '成员'}</span>
-        <button aria-label={`撤销 ${invitation.email} 的邀请`} onClick={async () => { try { const response = await appFetch(`/api/tenants/${auth.tenant.id}/invitations/${encodeURIComponent(invitation.email)}`, { method: 'DELETE' }); const data = await response.json(); if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`); await refreshMembers(); } catch (error) { setMembersError(String(error)); } }}>撤销</button>
-      </div>)}</div>}
-      <label>Google 账号邮箱<input type="email" value={memberEmail} onChange={e => { setMemberEmail(e.target.value); setMemberNotice(''); }} placeholder="teammate@example.com" /></label>
-      <button className="primary" disabled={!['owner', 'admin'].includes(auth.tenant.role) || !memberEmail.trim()} onClick={async () => { try { const result = await request(`/tenants/${auth.tenant.id}/members`, 'POST', { email: memberEmail, role: 'member' }) as { invited: boolean }; setMemberEmail(''); setMembersError(''); setMemberNotice(result.invited ? '邀请已创建。对方在 Coke Dots 登录同一 Google 账号后，会看到待接受邀请。' : '成员已加入工作区。'); await refreshMembers(); } catch (e) { onError(String(e)); } }}>添加工作区成员</button>
-      {memberNotice && <small role="status">{memberNotice}</small>}
-      {membersError && <small className="member-error">{membersError}</small>}
-      {!['owner', 'admin'].includes(auth.tenant.role) && <small>只有工作区所有者或管理员可以添加成员。</small>}
-    </div>
-    <div className="section-heading model-heading"><h2>共享模型 API</h2><p>所有账号和工作区共用同一模型地址、名称与 API Key。任务、记忆和工作区数据仍相互隔离。</p></div>
-    <div className="profile-card model-card" data-testid="shared-model-settings">
-      {canManageSharedModel ? <>
-        <label>API 地址<input aria-label="共享模型 API 地址" value={baseUrl} onChange={e => setBaseUrl(e.target.value)} /></label>
-        <label>模型名称<input aria-label="共享模型名称" value={model} onChange={e => setModel(e.target.value)} /></label>
-        <label>API 密钥<input aria-label="共享模型 API 密钥" type="password" autoComplete="off" placeholder={state.modelSettings.hasKey ? '已保存；留空则保持不变' : '输入密钥'} value={apiKey} onChange={e => setApiKey(e.target.value)} /></label>
-        <small>{state.modelSettings.adminTenantId ? '此配置由模型管理员工作区维护。' : '保存后，当前工作区将成为共享模型配置管理员。'}API Key 由服务器保存，不会提供给浏览器或写入工作区文件。</small>
-        <button className="primary" onClick={async () => { try { await request('/model-settings', 'PATCH', { baseUrl, model, apiKey }); setApiKey(''); } catch (e) { onError(String(e)); } }}>保存共享模型设置</button>
-      </> : <div data-testid="shared-model-settings-readonly">
-        <p>API 地址：{state.modelSettings.baseUrl || '未配置'}</p>
-        <p>模型名称：{state.modelSettings.model || '未配置'}</p>
-        <p>API 密钥：{state.modelSettings.hasKey ? '已配置' : '未配置'}</p>
-        <small>所有工作区都可以使用这份共享配置；只有模型管理员工作区的所有者或管理员可以修改。</small>
-      </div>}
-    </div>
-  </section>;
 }
 
 createRoot(document.getElementById('root')!).render(<React.StrictMode><App /></React.StrictMode>);

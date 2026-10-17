@@ -33,6 +33,8 @@ cp .env.example .env
 chmod 600 .env
 ```
 
+仅使用 Web 版时，可把 `npm ci` 替换为 `npm run install:web`，跳过 Electron 二进制下载；以后需要桌面外壳时运行 `npm run install:desktop` 补装。两种方式使用同一份锁文件，保留 Agent SDK 和 Web 所需依赖。
+
 ### 2. 配置登录
 
 生成一枚访问密钥：
@@ -135,4 +137,4 @@ npm run test:e2e  # Chrome UI + 模拟云电脑流程
 
 ## 许可证
 
-仓库目前尚未提供 `LICENSE` 文件，许可证待维护者明确。
+本项目采用 [MIT License](LICENSE)。允许直接使用、修改、再分发和商业使用；再分发源码或软件副本时需保留版权声明和许可证文本。第三方依赖遵循各自的许可证。

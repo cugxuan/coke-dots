@@ -16,7 +16,7 @@ The visible log console, DingTalk alert, and application use production-style wo
 
 ## Files
 
-- `log-system/index.html` and `public/incident-logs/index.html` are standalone log search interfaces; the latter is served to the public cloud-computer browser.
+- [`public/incident-logs/index.html`](../../public/incident-logs/index.html) is the canonical standalone log search interface, served to the public cloud-computer browser. `log-system/index.html` is a relative symlink to the same file so the original example path continues to work on macOS / Linux. Edit the canonical file only.
 - `reference-repo/` is the initial source for the private `cokepoppy/coke-agent-test` repository. Its test intentionally fails until the incident is repaired.
 
 ## Safety boundary

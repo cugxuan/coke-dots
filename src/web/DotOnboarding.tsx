@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { Snapshot } from '../shared/types.ts';
 import { DotAvatar } from './DotAvatar.tsx';
 import { DotComputerChoice } from './DotComputerChoice.tsx';

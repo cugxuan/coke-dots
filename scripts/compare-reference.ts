@@ -1,6 +1,5 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { PNG } from 'pngjs';
 import { compareRasters, cropRaster, differenceRaster, overlayRasters, resizeRaster, type ImageRect } from '../src/shared/reference-visual.ts';
 
@@ -69,5 +68,5 @@ function decode(bytes: Buffer, source: string) {
 }
 
 async function writePng(path: string, image: ReturnType<typeof cropRaster>) {
-  await writeFile(path, PNG.sync.write({ width: image.width, height: image.height, data: image.data }));
+  await writeFile(path, PNG.sync.write({ width: image.width, height: image.height, data: image.data } as PNG));
 }

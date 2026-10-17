@@ -29,7 +29,7 @@ test('Pi cloud kernel enables the full coding toolset and keeps runtime secrets 
     ModelRegistry: { inMemory: () => ({ registerProvider: (_provider: string, config: unknown) => { assert.equal((config as { baseUrl: string }).baseUrl, modelConfig.baseUrl); }, find: () => ({ id: modelConfig.model }) }) },
     SessionManager: {
       list: async (_cwd: string, directory: string) => { sessionDirectory = directory; return []; },
-      create: (_cwd: string, directory: string) => ({ appendMessage: () => '', getEntries: () => [], getSessionFile: () => undefined, getSessionId: () => 'pi-cloud-session' }),
+      create: (_cwd: string, _directory: string) => ({ appendMessage: () => '', getEntries: () => [], getSessionFile: () => undefined, getSessionId: () => 'pi-cloud-session' }),
       open: () => { throw new Error('unexpected resume'); },
     },
     createBashTool: (cwd: string, options: Record<string, any>) => {

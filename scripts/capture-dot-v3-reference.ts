@@ -76,11 +76,11 @@ async function openVideoAt(url: string) {
     const element = document.querySelector('video');
     return Boolean(element && element.readyState >= 2 && element.videoWidth > 0 && element.duration > 0);
   }, undefined, { timeout: 45_000 });
-  await page.locator('video').first().evaluate(element => { element.muted = true; element.pause(); });
+  await page.locator('video').first().evaluate((element: HTMLVideoElement) => { element.muted = true; element.pause(); });
 }
 
 async function readMetadata() {
-  return page.locator('video').first().evaluate(element => ({
+  return page.locator('video').first().evaluate((element: HTMLVideoElement) => ({
     width: element.videoWidth,
     height: element.videoHeight,
     durationSeconds: element.duration,
@@ -89,7 +89,7 @@ async function readMetadata() {
 
 async function playVideo() {
   for (let attempt = 1; attempt <= 3; attempt += 1) {
-    const result = await page.locator('video').first().evaluate(async element => {
+    const result = await page.locator('video').first().evaluate(async (element: HTMLVideoElement) => {
       element.muted = true;
       try {
         await element.play();

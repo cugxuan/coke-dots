@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import {
   hostProfileEnvironment, inspectDwsProfile, isolatedEnvironment, prepareProfileRoot, principalKey,

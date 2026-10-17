@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import type { DotAppearance } from '../shared/types.ts';
 import { dotAppearanceOptions, dotAvatarPalette } from '../shared/avatar.ts';
 import { DotAvatar, ShapeSilhouette } from './DotAvatar.tsx';
