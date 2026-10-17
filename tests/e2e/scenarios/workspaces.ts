@@ -110,6 +110,9 @@ export async function inviteMember(ctx: UiScenarioContext) {
   assert.equal(await ctx.gammaPage!.locator('.workspace-switcher option').filter({ hasText: 'Alpha Shared' }).count(), 0, 'A pending invitation exposed the workspace before acceptance');
   await ctx.screenshot(ctx.gammaPage!, '10b-gamma-pending-invitation');
   await ctx.gammaPage!.getByRole('button', { name: '接受并打开工作区' }).click();
+  await ctx.gammaPage!.waitForFunction(() =>
+    document.querySelector('[data-testid="app-shell"]')?.getAttribute('data-state-loaded') === 'true'
+    && document.querySelector('.workspace-switcher option:checked')?.textContent?.startsWith('Alpha Shared'));
   await ctx.clickNav(ctx.gammaPage!, 'Activity');
   await ctx.gammaPage!.locator('.task-card').filter({ hasText: 'E2E shared workspace task' }).waitFor({ state: 'visible' });
   assert.equal(await ctx.gammaPage!.locator('.profile-link strong').innerText(), 'Shared Dot');

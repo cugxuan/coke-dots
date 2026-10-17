@@ -322,6 +322,27 @@ export async function desktopVoiceCall(ctx: UiScenarioContext) {
     const composer = document.querySelector('.composer-wrap');
     return Boolean(timeline && timeline.scrollHeight > timeline.clientHeight + 48 && timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight <= 48 && composer && composer.getBoundingClientRect().bottom <= window.innerHeight + 1 && document.documentElement.scrollHeight <= window.innerHeight + 1);
   }, null, { timeout: 5_000 });
+  const scrollPane = ctx.alphaPage!.locator('.timeline');
+  const scrollBox = await scrollPane.boundingBox();
+  const composerBeforeScroll = await ctx.alphaPage!.locator('.composer-wrap').boundingBox();
+  const detailsBeforeScroll = await ctx.alphaPage!.locator('.dot-context-panel').boundingBox();
+  assert(scrollBox && composerBeforeScroll && detailsBeforeScroll, 'Conversation scrolling needs visible panes');
+  assert.equal(scrollBox.x + scrollBox.width, detailsBeforeScroll.x, 'The chat scrollbar must sit against the details divider');
+  await scrollPane.evaluate(element => { element.scrollTop = 0; });
+  await ctx.alphaPage!.mouse.move(scrollBox.x + scrollBox.width / 2, scrollBox.y + scrollBox.height / 2);
+  await ctx.alphaPage!.mouse.wheel(0, 400);
+  await ctx.alphaPage!.waitForFunction(() => document.querySelector('.timeline')!.scrollTop > 0);
+  await scrollPane.evaluate(element => { element.scrollTop = 0; });
+  await ctx.alphaPage!.mouse.move(scrollBox.x + scrollBox.width - 6, scrollBox.y + 12);
+  await ctx.alphaPage!.mouse.down();
+  await ctx.alphaPage!.mouse.move(scrollBox.x + scrollBox.width - 6, scrollBox.y + 180, { steps: 12 });
+  await ctx.alphaPage!.mouse.up();
+  await ctx.alphaPage!.waitForFunction(() => document.querySelector('.timeline')!.scrollTop > 0);
+  assert.deepEqual(await ctx.alphaPage!.locator('.composer-wrap').boundingBox(), composerBeforeScroll,
+    'Scrolling and dragging the chat scrollbar should leave the composer fixed');
+  assert.deepEqual(await ctx.alphaPage!.locator('.dot-context-panel').boundingBox(), detailsBeforeScroll,
+    'The details pane should not move with the conversation');
+  await scrollPane.evaluate(element => { element.scrollTop = element.scrollHeight; });
   const timelineTimes = await ctx.alphaPage!.locator('.timeline [data-testid="chat-timeline-item"]').evaluateAll(elements => elements.map(element => Date.parse(element.getAttribute('data-timestamp') || '')));
   assert(timelineTimes.every((time, index) => index === 0 || timelineTimes[index - 1]! <= time), 'Conversation entries and ended-call chips must appear in chronological order');
   assert.equal(await ctx.alphaPage!.getByText('Me: Call ended', { exact: true }).count(), 7, 'Each ended call should remain visible in the Dot conversation after the call panel closes');

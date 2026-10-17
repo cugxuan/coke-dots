@@ -7,6 +7,8 @@ async function assertChatToolbarLayout(ctx: UiScenarioContext) {
     const header = document.querySelector('.topbar')!.getBoundingClientRect();
     const actions = document.querySelector('.top-actions')!.getBoundingClientRect();
     const chat = document.querySelector('.chat-panel')!.getBoundingClientRect();
+    const timelineElement = document.querySelector('.timeline')!;
+    const timeline = timelineElement.getBoundingClientRect();
     const panel = document.querySelector('.dot-context-panel')!.getBoundingClientRect();
     const theme = document.querySelector('[data-testid="theme-toggle"]')!.getBoundingClientRect();
     const workspace = document.querySelector('.workspace-switcher select')!.getBoundingClientRect();
@@ -15,10 +17,12 @@ async function assertChatToolbarLayout(ctx: UiScenarioContext) {
       aboveContent: header.bottom <= chat.top && header.bottom <= panel.top,
       containsActions: actions.top >= header.top && actions.bottom <= header.bottom && actions.right <= header.right,
       controlsShareRow: Math.abs(theme.top + theme.height / 2 - workspace.top - workspace.height / 2) <= 1,
+      scrollsAtDivider: timeline.left === chat.left && timeline.right === panel.left,
+      reservesScrollbar: timelineElement.clientWidth < timelineElement.getBoundingClientRect().width,
     };
   });
-  assert.deepEqual(layout, { spansMain: true, aboveContent: true, containsActions: true, controlsShareRow: true },
-    'Theme and workspace controls should share one full-width toolbar above the chat and details panes');
+  assert.deepEqual(layout, { spansMain: true, aboveContent: true, containsActions: true, controlsShareRow: true, scrollsAtDivider: true, reservesScrollbar: true },
+    'Chat should have one top toolbar and a visible scrollbar gutter against the details pane');
 }
 
 export async function persistentTask(ctx: UiScenarioContext) {

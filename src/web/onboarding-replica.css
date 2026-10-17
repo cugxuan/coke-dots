@@ -61,3 +61,100 @@
 .dots-dark.dot-onboarding-mode .composer textarea::placeholder{color:#b3b0b8}
 .dots-dark.dot-onboarding-mode .send{background:#1888f5;color:#fff}
 @media(max-width:620px){.dot-conversation-time{margin-top:54px}.dot-onboarding-messages{padding-right:14px;padding-left:14px}.dot-onboarding-messages .message{max-width:92%}.dot-onboarding-mode .composer-wrap{padding-right:12px;padding-left:12px}}
+
+/* Keep the desktop scrollbar at the pane divider, independent of reading width. */
+@media (min-width: 701px) and (pointer: fine), (min-width: 1025px) {
+  .dot-context-mode {
+    font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+    --chat-reading-width: 960px;
+    --chat-gutter: 28px;
+    --chat-scrollbar-width: 12px;
+    --chat-scrollbar-track: #f7f6f8;
+    --chat-scrollbar-thumb: #bbb7c2;
+    --chat-scrollbar-hover: #918b9c;
+  }
+
+  .dots-dark.dot-context-mode {
+    --chat-scrollbar-track: #222225;
+    --chat-scrollbar-thumb: #6b6575;
+    --chat-scrollbar-hover: #91899d;
+  }
+
+  .dot-context-mode .topbar { height: 56px; }
+  .dot-context-mode .theme-toggle,
+  .dot-context-mode .workspace-switcher select { height: 36px; font-size: 13px; }
+  .dot-context-mode .workspace-switcher select { max-width: 250px; }
+
+  .dot-context-mode .timeline {
+    width: 100%;
+    min-height: 0;
+    margin: 0;
+    padding: 30px max(var(--chat-gutter), calc((100% - var(--chat-reading-width)) / 2 + var(--chat-gutter))) 24px;
+    overflow-x: hidden;
+    overscroll-behavior-y: contain;
+    scrollbar-gutter: stable;
+  }
+
+  .dot-context-mode .timeline::-webkit-scrollbar,
+  .dot-context-mode .dot-context-panel::-webkit-scrollbar { width: var(--chat-scrollbar-width); }
+  .dot-context-mode .timeline::-webkit-scrollbar-track,
+  .dot-context-mode .dot-context-panel::-webkit-scrollbar-track { background: var(--chat-scrollbar-track); }
+  .dot-context-mode .timeline::-webkit-scrollbar-thumb,
+  .dot-context-mode .dot-context-panel::-webkit-scrollbar-thumb {
+    min-height: 48px;
+    border: 3px solid transparent;
+    border-radius: 12px;
+    background: var(--chat-scrollbar-thumb);
+    background-clip: padding-box;
+  }
+  .dot-context-mode .timeline::-webkit-scrollbar-thumb:hover,
+  .dot-context-mode .dot-context-panel::-webkit-scrollbar-thumb:hover { background-color: var(--chat-scrollbar-hover); }
+  .dot-context-mode .timeline::-webkit-scrollbar-button,
+  .dot-context-mode .dot-context-panel::-webkit-scrollbar-button { display: none; }
+
+  @supports not selector(::-webkit-scrollbar) {
+    .dot-context-mode .timeline,
+    .dot-context-mode .dot-context-panel { scrollbar-color: var(--chat-scrollbar-thumb) var(--chat-scrollbar-track); }
+  }
+
+  .dot-context-mode .timeline-title { font-size: 13px; }
+  .dot-context-mode .message:where(.user, .dot) {
+    max-width: min(86%, 780px);
+    padding: 14px 18px;
+    border-radius: 16px;
+  }
+  .dot-context-mode .message p { font-size: 15px; line-height: 1.7; overflow-wrap: anywhere; }
+  .dot-context-mode .message.system p { font-size: 13px; }
+
+  /* Reserve the same gutter as the timeline so the input and messages align. */
+  .dot-context-mode .composer-wrap {
+    width: min(var(--chat-reading-width), 100%);
+    padding: 18px calc(var(--chat-gutter) + var(--chat-scrollbar-width)) 24px var(--chat-gutter);
+  }
+  .dot-context-mode .composer { min-height: 60px; border-radius: 20px; }
+  .dot-context-mode .composer textarea { font-size: 15px; }
+  .dot-context-mode .composer-bottom { font-size: 12px; }
+  .dot-context-mode .composer-bottom select { font-size: 12px; }
+  .dot-context-mode .send { width: 34px; height: 34px; }
+  .dot-context-mode .hint { font-size: 11px; }
+
+  .dot-context-mode .dot-context-panel { width: clamp(260px, 22vw, 320px); padding: 24px 20px; }
+  .dot-context-mode .context-agent { gap: 12px; padding-bottom: 18px; }
+  .dot-context-mode .context-agent strong { font-size: 15px; }
+  .dot-context-mode .context-avatar { width: 40px; height: 40px; }
+  .dot-context-mode .context-quick-actions button { height: 36px; font-size: 12px; }
+  .dot-context-mode .context-section { padding-bottom: 18px; margin-bottom: 20px; }
+  .dot-context-mode .context-section h2 { margin-bottom: 12px; font-size: 13px; }
+  .dot-context-mode .context-computer-row,
+  .dot-context-mode .context-output-row,
+  .dot-context-mode .context-activity-row { min-height: 48px; gap: 10px; padding: 8px 6px; }
+  .dot-context-mode .context-row-copy strong { font-size: 12px; }
+  .dot-context-mode .context-row-copy small { font-size: 11px; }
+  .dot-context-mode .context-computer-icon,
+  .dot-context-mode .context-output-icon { width: 28px; height: 28px; }
+  .dot-context-mode .context-empty { font-size: 12px; }
+}
+
+@media (min-width: 521px) and (max-width: 1100px) and (pointer: fine) {
+  .dot-context-mode:not(.home-mode) .composer-bottom { flex-basis: 100%; justify-content: flex-end; }
+}
