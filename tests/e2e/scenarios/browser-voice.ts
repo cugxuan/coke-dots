@@ -170,8 +170,12 @@ export async function desktopVoiceCall(ctx: UiScenarioContext) {
   await headerCallLaunch.waitFor({ state: 'visible' });
   const headerCallBox = await headerCallLaunch.boundingBox();
   const chatContextBox = await ctx.alphaPage!.locator('.dot-context-panel').boundingBox();
-  assert(headerCallBox && chatContextBox && headerCallBox.y < 40 && headerCallBox.x + headerCallBox.width <= chatContextBox.x,
-    'The conversation-header call action should sit at the upper right edge of the chat pane, before the Dot details panel');
+  const headerBox = await ctx.alphaPage!.locator('.topbar').boundingBox();
+  assert(headerCallBox && chatContextBox && headerBox && headerCallBox.y >= headerBox.y
+    && headerCallBox.y + headerCallBox.height <= headerBox.y + headerBox.height
+    && headerCallBox.x + headerCallBox.width <= headerBox.x + headerBox.width
+    && headerBox.y + headerBox.height <= chatContextBox.y,
+    'The conversation call action should stay inside the full-width toolbar above the Dot details panel');
   const headerActionsBox = await ctx.alphaPage!.locator('.top-actions').boundingBox();
   assert(headerCallBox && headerActionsBox && headerCallBox.x >= headerActionsBox.x + headerActionsBox.width,
     'The conversation-header call action should not overlap workspace or theme controls');

@@ -137,7 +137,10 @@ export async function firstRunConversation(ctx: UiScenarioContext) {
   const firstBubbleBounds = await firstBubble.boundingBox();
   assert(firstBubbleBounds && firstBubbleBounds.width >= 155 && firstBubbleBounds.width <= 175, 'The welcome bubble should match the measured source-frame width');
   assert.equal(await firstBubble.locator('p').evaluate(element => getComputedStyle(element).fontSize), '12px');
-  assert(firstBubbleBounds.y >= 188 && firstBubbleBounds.y <= 194, `Welcome bubbles should begin at the observed vertical position, got ${firstBubbleBounds.y}`);
+  const onboardingBounds = await onboarding.boundingBox();
+  assert(onboardingBounds, 'The onboarding conversation should have visible bounds');
+  const firstBubbleOffset = firstBubbleBounds.y - onboardingBounds.y;
+  assert(firstBubbleOffset >= 188 && firstBubbleOffset <= 194, `Welcome bubbles should retain their position within the conversation below the toolbar, got ${firstBubbleOffset}`);
   assert.equal(await ctx.alphaPage!.locator('.dot-conversation-avatar').evaluate(element => Math.round(element.getBoundingClientRect().width)), 58);
   assert.equal(await ctx.alphaPage!.locator('.sidebar').evaluate(element => Math.round(element.getBoundingClientRect().width)), 0);
   assert.equal(await ctx.alphaPage!.getByTestId('surface-switcher').isVisible(), false);

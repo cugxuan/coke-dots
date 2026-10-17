@@ -1,6 +1,26 @@
 import assert from 'node:assert/strict';
 import type { UiScenarioContext } from '../ui.e2e.ts';
 
+async function assertChatToolbarLayout(ctx: UiScenarioContext) {
+  const layout = await ctx.alphaPage!.evaluate(() => {
+    const main = document.querySelector('.main')!.getBoundingClientRect();
+    const header = document.querySelector('.topbar')!.getBoundingClientRect();
+    const actions = document.querySelector('.top-actions')!.getBoundingClientRect();
+    const chat = document.querySelector('.chat-panel')!.getBoundingClientRect();
+    const panel = document.querySelector('.dot-context-panel')!.getBoundingClientRect();
+    const theme = document.querySelector('[data-testid="theme-toggle"]')!.getBoundingClientRect();
+    const workspace = document.querySelector('.workspace-switcher select')!.getBoundingClientRect();
+    return {
+      spansMain: header.left === main.left && header.right === main.right && header.top === main.top,
+      aboveContent: header.bottom <= chat.top && header.bottom <= panel.top,
+      containsActions: actions.top >= header.top && actions.bottom <= header.bottom && actions.right <= header.right,
+      controlsShareRow: Math.abs(theme.top + theme.height / 2 - workspace.top - workspace.height / 2) <= 1,
+    };
+  });
+  assert.deepEqual(layout, { spansMain: true, aboveContent: true, containsActions: true, controlsShareRow: true },
+    'Theme and workspace controls should share one full-width toolbar above the chat and details panes');
+}
+
 export async function persistentTask(ctx: UiScenarioContext) {
   await ctx.createTask(ctx.alphaPage!, ctx.alphaPrivateTask);
   await ctx.alphaPage!.locator('.timeline .pill').waitFor({ state: 'visible', timeout: 10_000 });
@@ -15,16 +35,12 @@ export async function persistentTask(ctx: UiScenarioContext) {
   assert.equal(await contextPanel.getByRole('button', { name: 'Call' }).isDisabled(), false);
   assert.equal(await contextPanel.getByRole('button', { name: 'Slack' }).isDisabled(), false);
   assert.equal(await contextPanel.getByRole('region', { name: 'Skills' }).count(), 0, 'The observed details panel ends after Outputs; do not invent an unverified Skills section');
-  assert.equal(await ctx.alphaPage!.evaluate(() => {
-    const actions = document.querySelector('.top-actions')!.getBoundingClientRect();
-    const panel = document.querySelector('.dot-context-panel')!.getBoundingClientRect();
-    return actions.right <= panel.left;
-  }), true, 'Top-bar tenant and theme controls overlap the observed details panel');
+  await assertChatToolbarLayout(ctx);
   await ctx.screenshot(ctx.alphaPage!, '03-task-progress-and-context');
   await ctx.alphaPage!.getByTestId('theme-toggle').click();
   assert.equal(await ctx.alphaPage!.getByTestId('app-shell').getAttribute('data-theme'), 'dark');
   assert.equal(await contextPanel.evaluate(element => getComputedStyle(element).backgroundColor), 'rgb(17, 17, 19)');
-  assert.equal(await ctx.alphaPage!.evaluate(() => document.querySelector('.top-actions')!.getBoundingClientRect().right <= document.querySelector('.dot-context-panel')!.getBoundingClientRect().left), true);
+  await assertChatToolbarLayout(ctx);
   await ctx.screenshot(ctx.alphaPage!, '03-task-context-dark');
   await ctx.alphaPage!.getByTestId('theme-toggle').click();
   assert.equal(await ctx.alphaPage!.getByTestId('app-shell').getAttribute('data-theme'), 'light');
