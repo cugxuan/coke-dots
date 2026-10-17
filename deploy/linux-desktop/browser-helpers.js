@@ -1,6 +1,9 @@
 // Evaluated inside Browser Use's killable, task-scoped JavaScript worker.
 // page, tabs and browser are Browser Use primitives; the caller injects playwrightPath.
 var ui = await (async () => {
+  // Keep internal handles independent of model-created variables such as `var tabs`.
+  const browserTabs = tabs;
+  let activePage = page;
   const { chromium } = require(playwrightPath);
   const { performance } = require('node:perf_hooks');
   const connection = await chromium.connectOverCDP(cdpUrl);
@@ -10,26 +13,26 @@ var ui = await (async () => {
   const marker = `dots-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const interactive = new Set(['button', 'link', 'textbox', 'searchbox', 'combobox', 'checkbox', 'radio', 'tab', 'menuitem', 'option', 'slider', 'spinbutton']);
   async function current() {
-    await page.info();
+    await activePage.info();
     for (const candidate of connection.contexts()[0].pages()) {
       const session = await candidate.context().newCDPSession(candidate);
       try {
         const { targetInfo } = await session.send('Target.getTargetInfo');
-        if (targetInfo.targetId === page.targetId) return candidate;
+        if (targetInfo.targetId === activePage.targetId) return candidate;
       } finally { await session.detach(); }
     }
     throw new Error('The current tab disappeared. Inspect tabs before continuing; actions were not replayed.');
   }
   async function documentId() {
-    return (await page.cdp('DOM.getDocument', { depth: 0 })).root.backendNodeId;
+    return (await activePage.cdp('DOM.getDocument', { depth: 0 })).root.backendNodeId;
   }
   async function state() {
     const active = await current();
-    const snapshot = await page.snapshot();
+    const snapshot = await activePage.snapshot();
     const available = snapshot.nodes.filter(n => interactive.has(n.role));
     const controls = available.slice(0, 100).map(node => ({ ...node, name: node.name.slice(0, 160), ...(typeof node.value === 'string' ? { value: node.value.slice(0, 200) } : {}) }));
     const text = await active.locator('body').innerText({ timeout: 3000 }).catch(() => '');
-    const state = { tabId: page.targetId, url: snapshot.url, title: snapshot.title.slice(0, 300), controls, text: text.slice(0, 6000), truncated: text.length > 6000 || available.length > 100 };
+    const state = { tabId: activePage.targetId, url: snapshot.url, title: snapshot.title.slice(0, 300), controls, text: text.slice(0, 6000), truncated: text.length > 6000 || available.length > 100 };
     // Keep the latest observation valid JSON within the executor's output budget.
     while (JSON.stringify(state).length > 8500) {
       state.truncated = true;
@@ -37,24 +40,24 @@ var ui = await (async () => {
       else if (controls.length) controls.pop();
       else { state.url = state.url.slice(0, 2048); break; }
     }
-    observation = { targetId: page.targetId, documentId: await documentId(), ids: new Set(controls.map(n => n.id)) };
+    observation = { targetId: activePage.targetId, documentId: await documentId(), ids: new Set(controls.map(n => n.id)) };
     return state;
   }
   async function locator(id) {
-    if (!Number.isInteger(id) || !observation?.ids.has(id) || observation.targetId !== page.targetId || observation.documentId !== await documentId()) {
+    if (!Number.isInteger(id) || !observation?.ids.has(id) || observation.targetId !== activePage.targetId || observation.documentId !== await documentId()) {
       throw new Error('Use an element id from ui.state() on the current document. Observe again after navigation.');
     }
-    const { object } = await page.cdp('DOM.resolveNode', { backendNodeId: id });
+    const { object } = await activePage.cdp('DOM.resolveNode', { backendNodeId: id });
     if (!object.objectId) throw new Error('The observed element no longer exists; inspect again.');
     const value = `${marker}-${id}`;
     try {
-      const result = await page.cdp('Runtime.callFunctionOn', {
+      const result = await activePage.cdp('Runtime.callFunctionOn', {
         objectId: object.objectId, returnByValue: true,
         functionDeclaration: 'function(value) { if (!(this instanceof Element) || !this.isConnected) throw Error("Observed element detached"); this.setAttribute("data-coke-browser-ref", value); }',
         arguments: [{ value }],
       });
       if (result.exceptionDetails) throw new Error('The observed element detached; inspect again.');
-    } finally { await page.cdp('Runtime.releaseObject', { objectId: object.objectId }); }
+    } finally { await activePage.cdp('Runtime.releaseObject', { objectId: object.objectId }); }
     const active = await current();
     // Include same-origin and cross-origin frames exposed by Playwright, without guessing a selector.
     for (const frame of active.frames()) {
@@ -96,28 +99,30 @@ var ui = await (async () => {
       sequence++;
       return state();
     },
-    listTabs: async () => (await tabs.list()).map(t => ({ id: t.targetId, url: t.url, title: t.title, active: t.targetId === page.targetId })),
+    listTabs: async () => (await browserTabs.list()).map(t => ({ id: t.targetId, url: t.url, title: t.title, active: t.targetId === activePage.targetId })),
     open: async value => {
-      page = await tabs.open(url(value || 'about:blank'));
+      activePage = await browserTabs.open(url(value || 'about:blank'));
+      page = activePage;
       observation = undefined;
       await (await current()).bringToFront(); sequence++;
       return state();
     },
     switchTab: async id => {
-      if (!(await tabs.list()).some(t => t.targetId === id)) throw new Error('Unknown tab id; list tabs again.');
-      page = await tabs.get(id); observation = undefined;
+      if (!(await browserTabs.list()).some(t => t.targetId === id)) throw new Error('Unknown tab id; list tabs again.');
+      activePage = await browserTabs.get(id); page = activePage; observation = undefined;
       await (await current()).bringToFront(); sequence++;
       return state();
     },
     closeTabs: async ids => {
-      const all = await tabs.list();
+      const all = await browserTabs.list();
       if (!Array.isArray(ids) || !ids.length || ids.length > 50 || ids.some(id => !all.some(t => t.targetId === id))) throw new Error('Supply existing ids from ui.listTabs().');
       const closing = new Set(ids);
-      // Keep Chromium alive even when the user asks to close every page.
-      if (closing.size === all.length) page = await tabs.open('about:blank');
-      else if (closing.has(page.targetId)) page = await tabs.get(all.find(t => !closing.has(t.targetId)).targetId);
+      // Keep Chromium alive even when the user asks to close every activePage.
+      if (closing.size === all.length) activePage = await browserTabs.open('about:blank');
+      else if (closing.has(activePage.targetId)) activePage = await browserTabs.get(all.find(t => !closing.has(t.targetId)).targetId);
+      page = activePage;
       observation = undefined;
-      for (const id of closing) await (await tabs.get(id)).close();
+      for (const id of closing) await (await browserTabs.get(id)).close();
       await (await current()).bringToFront(); sequence++;
       return { closed: [...closing], tabs: await ui.listTabs() };
     },

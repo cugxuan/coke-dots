@@ -61,7 +61,7 @@ test('real Browser Use executor batches observed actions, keeps tabs/login, reje
     assert.equal(context.pages().length, 3, 'Ending a task must retain all browser tabs');
     assert.equal((await context.cookies(origin))[0].value, 'retained');
     executor = make();
-    await run('var known = await ui.listTabs(); await ui.closeTabs(known.map(t => t.id));');
+    await run('var tabs = await ui.listTabs(); await ui.closeTabs(tabs.map(t => t.id));');
     assert.equal(context.pages().length, 1);
     assert.equal(context.pages()[0].url(), 'about:blank');
     assert.equal(context.browser().isConnected(), true, 'Close-all must not exit Chromium');
