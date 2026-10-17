@@ -25,22 +25,15 @@ import { createConnection } from 'node:net';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer } from 'ws';
 import { bridgeVolcengineVoiceCall } from './volcengine-voice-gateway.ts';
-import { isAllowedOrigin, isLocalRequest } from './request-boundary.ts';
+import { controlPlaneNetwork, isAllowedOrigin, isLocalRequest } from './request-boundary.ts';
 import { usesCloudComputer } from './desktop-runtime-config.ts';
 
 const envFile = resolve(process.env.DOTS_ENV_FILE || '.env');
 if (existsSync(envFile)) process.loadEnvFile(envFile);
 modelSecretBackend(); // Reject a misspelled credential backend before accepting requests.
 
-const port = Number(process.env.DOTS_PORT || 4317);
-const host = '127.0.0.1';
+const { port, host, boundary: requestBoundary } = controlPlaneNetwork();
 const basePath = normalizeBasePath(process.env.DOTS_BASE_PATH || '');
-const requestBoundary = {
-  port,
-  publicOrigin: process.env.DOTS_PUBLIC_ORIGIN,
-  publicHost: process.env.DOTS_PUBLIC_HOST,
-  trustedProxyToken: process.env.DOTS_TRUSTED_PROXY_TOKEN,
-};
 const dataDirectory = resolve(process.env.DOTS_DATA_DIR || './data');
 const store = new Store(dataDirectory);
 const priorModelAdminTenantId = store.getAppSetting('modelSettingsAdminTenantId');
@@ -142,7 +135,7 @@ const server = createServer(async (req, res) => {
     try { return reply(res, 200, { ok: true, data: await dingtalk.runAgentCalendarOperation(grant, body) }); }
     catch (error) { return reply(res, 400, { ok: false, error: error instanceof Error ? error.message : '钉钉日历读取失败' }); }
   }
-  if (!isLocalRequest(req, path, requestBoundary)) return reply(res, 403, { error: 'Local access only' });
+  if (!isLocalRequest(req, path, requestBoundary)) return reply(res, 403, { error: 'Request host, network or origin is not allowed' });
 
   if (path === '/auth/google/callback' && req.method === 'GET') return auth.finish(req, res, url);
   if (path === '/auth/slack/callback' && req.method === 'GET') return slack.finish(req, res, url, auth.session(req));

@@ -21,7 +21,7 @@ export class AuthService {
     if (!['google', 'local'].includes(this.mode)) throw new Error('DOTS_AUTH_MODE must be google or local');
     if (this.mode === 'local') {
       if (!/^[\x21-\x7e]{32,256}$/.test(this.localToken)) throw new Error('Local login requires a random DOTS_LOCAL_AUTH_TOKEN of 32–256 characters');
-      if (environment.DOTS_PUBLIC_ORIGIN || environment.DOTS_PUBLIC_HOST) throw new Error('Local login is only for loopback access. Use SSH port forwarding, or Google login for a public deployment.');
+      if (environment.DOTS_PUBLIC_ORIGIN || environment.DOTS_PUBLIC_HOST) throw new Error('Local login supports loopback and explicitly configured LAN access. Use Google login for a public deployment.');
     }
   }
 
