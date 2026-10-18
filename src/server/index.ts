@@ -1,3 +1,4 @@
+import { ChatMessages, ChatSubmissionError, parseChatSubmission } from './chat-messages.ts';
 import { normalizeBasePath, readJson, readBytes, textAttachmentType, reply, rejectUpgrade, writeTaskArtifact, serveStatic } from './http-utils.ts';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { resolve, join, extname } from 'node:path';
@@ -37,6 +38,7 @@ const { port, host, boundary: requestBoundary } = controlPlaneNetwork();
 const basePath = normalizeBasePath(process.env.DOTS_BASE_PATH || '');
 const dataDirectory = resolve(process.env.DOTS_DATA_DIR || './data');
 const store = new Store(dataDirectory);
+const chatMessages = new ChatMessages(store);
 const priorModelAdminTenantId = store.getAppSetting('modelSettingsAdminTenantId');
 const modelSettingsCandidates = store.modelSettingsCandidates();
 const modelSettingsSource = modelSettingsCandidates.find(item => item.tenantId === priorModelAdminTenantId)
@@ -691,6 +693,21 @@ const server = createServer(async (req, res) => {
     if (path === '/api/computer/type' && req.method === 'POST') return reply(res, 200, await computer.type(String(body.text || '')));
     if (path === '/api/computer/press' && req.method === 'POST') return reply(res, 200, await computer.press(String(body.key || '')));
 
+    if (path === '/api/chat/messages' && req.method === 'POST') {
+      const controller = new AbortController();
+      const cancel = () => { if (!res.writableEnded) controller.abort(); };
+      res.once('close', cancel);
+      try {
+        loadModelSettings(store.getAppSetting('modelBaseUrl'), store.getAppSetting('modelName'), store.getAppSetting('modelSettingsAdminTenantId'));
+        const result = await chatMessages.submit(session.tenant.id, session.user.id, parseChatSubmission(body), controller.signal);
+        if (result.status === 'submitted') { publish(); void worker.tick(); }
+        return reply(res, result.status === 'submitted' ? 201 : 200, result);
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        if (error instanceof ChatSubmissionError) return reply(res, error.status, { error: error.message });
+        throw error;
+      } finally { res.removeListener('close', cancel); }
+    }
     if (path === '/api/tasks' && req.method === 'POST') {
       const instruction = String(body.instruction || '').trim();
       if (!instruction || instruction.length > 10000) return reply(res, 400, { error: 'Instruction must contain 1–10000 characters' });
@@ -847,6 +864,7 @@ const server = createServer(async (req, res) => {
         const instruction = String(body.instruction || '').trim();
         if (!instruction || instruction.length > 10000) return reply(res, 400, { error: 'Invalid instruction' });
         store.updateTask(old.id, { instruction, status: 'queued', nextRunAt: new Date().toISOString() }, session.tenant.id);
+        store.db.prepare('UPDATE tasks SET followup_message=NULL WHERE tenant_id=? AND id=?').run(session.tenant.id, old.id);
         store.addEntry('user', instruction, old.id, session.tenant.id);
       } else if (action === 'priority') {
         const priority = Number(body.priority);

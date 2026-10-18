@@ -528,8 +528,8 @@ export class Store {
         if (!old) throw new Error('等待回复的任务不存在');
         if (old.status !== 'waiting') throw new Error('任务当前没有等待回复');
         const instruction = `${old.instruction}\n\nUser reply: ${transcript}`;
-        this.db.prepare("UPDATE tasks SET instruction=?,status='queued',next_run_at=?,error=NULL,updated_at=? WHERE tenant_id=? AND id=? AND status='waiting'")
-          .run(instruction, now, now, input.tenantId, old.id);
+        this.db.prepare("UPDATE tasks SET instruction=?,followup_message=?,status='queued',next_run_at=?,error=NULL,updated_at=? WHERE tenant_id=? AND id=? AND status='waiting'")
+          .run(old.followupMessage ? old.instruction : instruction, old.followupMessage ? transcript : null, now, now, input.tenantId, old.id);
         this.db.prepare('INSERT INTO entries(tenant_id,task_id,kind,body,created_at) VALUES (?,?,?,?,?)')
           .run(input.tenantId, old.id, 'user', transcript, now);
         task = this.getTask(old.id, input.tenantId);
@@ -840,7 +840,9 @@ export class Store {
     const taskSchedule = scheduleForTask(scheduleSpec, scheduleMinutes);
     const scheduleMinutesValue = taskSchedule?.frequency === 'interval' ? taskSchedule.intervalMinutes : null;
     if (attachmentIds.length > 5 || new Set(attachmentIds).size !== attachmentIds.length) throw new Error('附件数量或列表无效');
-    this.db.exec('BEGIN IMMEDIATE');
+    // Chat submission also atomically saves its receipt and conversational focus.
+    const ownsTransaction = !this.db.isTransaction;
+    if (ownsTransaction) this.db.exec('BEGIN IMMEDIATE');
     try {
       if (attachmentIds.length) {
         if (!uploaderId) throw new Error('上传附件的用户无效');
@@ -859,9 +861,9 @@ export class Store {
       }
       this.addEntry('user', instruction.trim(), id, tenantId, attachmentIds);
       this.addEntry('system', taskSchedule ? `已安排：${describeSchedule(taskSchedule)}。` : '已加入工作队列。', id, tenantId);
-      this.db.exec('COMMIT');
+      if (ownsTransaction) this.db.exec('COMMIT');
       return this.getTask(id, tenantId)!;
-    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+    } catch (error) { if (ownsTransaction) this.db.exec('ROLLBACK'); throw error; }
   }
 
   addPendingAttachment(tenantId: string, uploaderId: string, name: string, mediaType: string, content: Uint8Array): AttachmentSummary {
@@ -1023,8 +1025,8 @@ export class Store {
       const current = this.getTask(id, tenantId);
       if (!current) { this.db.exec('ROLLBACK'); return null; }
       if (current.status !== 'waiting') throw new Error('Task is not waiting for a reply');
-      this.db.prepare("UPDATE tasks SET instruction=?,status='queued',next_run_at=?,error=NULL,updated_at=? WHERE tenant_id=? AND id=?")
-        .run(instruction, now, now, tenantId, id);
+      this.db.prepare("UPDATE tasks SET instruction=?,followup_message=?,status='queued',next_run_at=?,error=NULL,updated_at=? WHERE tenant_id=? AND id=?")
+        .run(old.followupMessage ? old.instruction : instruction, old.followupMessage ? reply : null, now, now, tenantId, id);
       this.db.prepare('INSERT INTO entries(tenant_id,task_id,kind,body,created_at) VALUES (?,?,?,?,?)')
         .run(tenantId, id, 'user', reply, now);
       this.db.exec('COMMIT');

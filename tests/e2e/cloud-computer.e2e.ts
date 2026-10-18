@@ -407,10 +407,10 @@ try {
 
   await page.getByTestId('engine-select').selectOption('pi');
   await page.getByTestId('task-composer').fill('请在云电脑中创建俄罗斯方块游戏文件');
-  const taskResponse = page.waitForResponse(response => response.url().endsWith('/api/tasks') && response.request().method() === 'POST');
+  const taskResponse = page.waitForResponse(response => response.url().endsWith('/api/chat/messages') && response.request().method() === 'POST');
   await page.getByTestId('task-composer').press('Enter');
   const response = await taskResponse;
-  const created = { status: response.status(), task: await response.json() as { id: string } };
+  const created = { status: response.status(), task: (await response.json() as { task: { id: string } }).task };
   assert.equal(created.status, 201);
   await page.getByTestId('computer-split').waitFor();
   const progress = page.getByTestId(`task-progress-${created.task.id}`);

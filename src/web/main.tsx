@@ -1,7 +1,7 @@
 import { TaskProgress } from './TaskProgress.tsx';
 import React, { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { selectableEngines, type AttachmentSummary, type DotAppearance, type Engine, type Entry, type ScheduleSpec, type Snapshot, type Task, type VoiceCallSession } from '../shared/types.ts';
+import { selectableEngines, type AttachmentSummary, type ChatMessageResult, type DotAppearance, type Engine, type Entry, type ScheduleSpec, type Snapshot, type Task, type VoiceCallSession } from '../shared/types.ts';
 import { engineAvailabilityHint } from '../shared/engine-availability.ts';
 import { appFetch, request } from './api.ts';
 import './base.css';
@@ -27,6 +27,7 @@ import './computer-choice.css';
 import './call-timeline.css';
 import './mobile-replica.css';
 import './computer-split.css';
+import './chat-routing.css';
 import { MessageBody } from './MessageBody.tsx';
 import { LoginScreen } from './LoginScreen.tsx';
 import { ActivityView } from './ActivityView.tsx';
@@ -88,6 +89,15 @@ function App() {
   const [engine, setEngine] = useState<Engine>(defaultEngine);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [routeQuestion, setRouteQuestion] = useState<Extract<ChatMessageResult, { status: 'clarify' }> | null>(null);
+  const [routeNotice, setRouteNotice] = useState<{ taskId: string; title: string; routing: string } | null>(null);
+  const submissionController = useRef<AbortController | null>(null);
+  const submissionIdentity = useRef<{ signature: string; id: string } | null>(null);
+
+  useEffect(() => {
+    setRouteQuestion(null); setRouteNotice(null);
+    submissionController.current?.abort(); submissionController.current = null; setBusy(false);
+  }, [authContext?.tenant.id, authContext?.user.id, selected, view]);
 
   useEffect(() => {
     if (view === 'home' || view === 'chat') lastChatLocation.current = { view, selected, selectedPageId };
@@ -278,8 +288,8 @@ function App() {
     setComputerAccessOpen(false);
   }
 
-  async function submit() {
-    if (!draft.trim() || busy) return;
+  async function submit(choice?: { mode: 'new' | 'continue'; taskId?: string }) {
+    if (!draft.trim() || busy || uploadingAttachments || submissionController.current) return;
     const keepRootDotConversation = selected === null;
     if (state.remoteEngines.includes(engine) && !state.availableEngines.includes(engine)) {
       setError(state.modelSettings.apiKeyStatus === 'unavailable'
@@ -289,7 +299,9 @@ function App() {
         : '所选云电脑 Agent 未配置实例共享模型 API，请先完成配置后再提交。');
       return;
     }
-    setBusy(true); setError('');
+    const controller = new AbortController();
+    submissionController.current = controller;
+    setBusy(true); setError(''); setRouteQuestion(null);
     try {
       if (await computerRef.current?.releaseControl() === false) return;
       const scheduleSpec: ScheduleSpec | null = !schedule ? null : frequency === 'interval'
@@ -297,9 +309,28 @@ function App() {
         : frequency === 'daily'
           ? { frequency, time: scheduleTime, timeZone: scheduleTimeZone, endDate: scheduleEndDate || null }
           : { frequency, weekdays: scheduleWeekdays, time: scheduleTime, timeZone: scheduleTimeZone, endDate: scheduleEndDate || null };
-      const task = await request('/tasks', 'POST', { instruction: draft, scheduleSpec, scheduleMinutes: schedule && frequency === 'interval' ? minutes : null, engine, attachmentIds: pendingAttachments.map(attachment => attachment.id) }) as Task;
+      let task: Task;
+      if (schedule) {
+        task = await request('/tasks', 'POST', { instruction: draft, scheduleSpec, scheduleMinutes: frequency === 'interval' ? minutes : null, engine, attachmentIds: pendingAttachments.map(attachment => attachment.id) }) as Task;
+      } else {
+        const mode = choice?.mode || (selected ? 'continue' : view === 'home' ? 'new' : 'auto');
+        const payload = { instruction: draft, engine, mode, ...(mode === 'continue' ? { taskId: choice?.taskId || selected } : {}), attachmentIds: pendingAttachments.map(attachment => attachment.id) };
+        const signature = JSON.stringify({ tenantId: authContext?.tenant.id, userId: authContext?.user.id, ...payload });
+        if (submissionIdentity.current?.signature !== signature) submissionIdentity.current = { signature, id: crypto.randomUUID() };
+        const response = await appFetch('/api/chat/messages', { method: 'POST', headers: { 'content-type': 'application/json' }, signal: controller.signal,
+          body: JSON.stringify({ ...payload, messageId: submissionIdentity.current.id }) });
+        const result = await response.json() as ChatMessageResult & { error?: string };
+        if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+        if (controller.signal.aborted) return;
+        if (result.status === 'clarify') { setRouteQuestion(result); return; }
+        task = result.task;
+        setRouteNotice({ taskId: task.id, title: task.title, routing: result.routing });
+        submissionIdentity.current = null;
+      }
+      if (controller.signal.aborted) return;
       setDraft(''); setPendingAttachments([]); setSelected(keepRootDotConversation ? null : task.id); setSelectedPageId(null); setView(current => current === 'computer' ? 'computer' : 'chat'); setSchedule(false); setFrequency('interval'); setMinutes(60); setScheduleWeekdays([]); setScheduleEndDate('');
-    } catch (e) { setError(String(e)); } finally { setBusy(false); }
+    } catch (e) { if (!controller.signal.aborted) setError(String(e)); }
+    finally { if (submissionController.current === controller) { submissionController.current = null; setBusy(false); } }
   }
 
   async function uploadAttachments(files: FileList | null) {
@@ -466,8 +497,19 @@ function App() {
           {selectedTask && <TaskControls task={selectedTask} act={act} />}
         </div>}
         <div className="composer-wrap">
-          {pendingAttachments.length > 0 && <ul className="pending-attachments" data-testid="pending-attachments" aria-label="待发送附件">{pendingAttachments.map(attachment => <li key={attachment.id} data-testid="pending-attachment"><span aria-hidden="true">▤</span><span className="attachment-name" title={attachment.name}>{attachment.name}</span><button type="button" aria-label={`移除附件 ${attachment.name}`} onClick={() => void removePendingAttachment(attachment)}>×</button></li>)}</ul>}
-          <div className="composer"><input ref={attachmentInputRef} className="attachment-input" data-testid="attachment-input" type="file" multiple accept=".txt,.md,.markdown,.csv,.tsv,.json,.yaml,.yml,.xml,.html,.htm,.css,.js,.jsx,.ts,.tsx,.py,.go,.rs,.java,.sql,.sh,.toml,.ini,.log,.c,.h,.cpp,.hpp" onChange={event => void uploadAttachments(event.currentTarget.files)} /><button className="attachment-button" data-testid="attachment-button" type="button" onMouseDown={event => event.preventDefault()} aria-label="添加附件" title="添加附件" disabled={uploadingAttachments || pendingAttachments.length >= 5} onClick={() => attachmentInputRef.current?.click()}><svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg></button><textarea data-testid="task-composer" ref={composerRef} value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void submit(); } }} placeholder={view === 'home' ? 'Ask ChatGPT' : 'Type a message'} /><DictationButton draft={draft} setDraft={setDraft} onError={setError} textareaRef={composerRef} /><div className="composer-bottom"><label>内核 <select data-testid="engine-select" value={engine} onChange={e => setEngine(e.target.value as Engine)}>{selectableEngines.map(id => <option key={id} value={id} disabled={state.remoteEngines.includes(id) && !state.availableEngines.includes(id)}>{engineText[id]}{state.availableEngines.includes(id) ? '' : ' · 未配置'}</option>)}</select></label><label className="schedule-toggle"><input type="checkbox" checked={schedule} onChange={e => setSchedule(e.target.checked)} /> 定期检查</label><button className="voice-call-launch" data-testid="voice-call-launch" type="button" onMouseDown={event => event.preventDefault()} aria-label={`拨打 ${state.profile.name}`} title={`拨打 ${state.profile.name}`} onClick={startDotCall}><svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true"><path d="M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg></button><button className="send" onMouseDown={event => event.preventDefault()} disabled={!stateLoaded || busy || !draft.trim() || (state.remoteEngines.includes(engine) && !state.availableEngines.includes(engine))} onClick={() => void submit()}>↑</button></div>{schedule && <RecurrenceEditor frequency={frequency} setFrequency={setFrequency} minutes={minutes} setMinutes={setMinutes} time={scheduleTime} setTime={setScheduleTime} timeZone={scheduleTimeZone} setTimeZone={setScheduleTimeZone} weekdays={scheduleWeekdays} setWeekdays={setScheduleWeekdays} endDate={scheduleEndDate} setEndDate={setScheduleEndDate} />}</div><small className="hint" data-testid="composer-hint">{engineAvailabilityHint(state, engine)}</small></div>
+          {pendingAttachments.length > 0 && <ul className="pending-attachments" data-testid="pending-attachments" aria-label="待发送附件">{pendingAttachments.map(attachment => <li key={attachment.id} data-testid="pending-attachment"><span aria-hidden="true">▤</span><span className="attachment-name" title={attachment.name}>{attachment.name}</span><button type="button" aria-label={`移除附件 ${attachment.name}`} disabled={busy} onClick={() => void removePendingAttachment(attachment)}>×</button></li>)}</ul>}
+          {!schedule && view !== 'home' && <div className="chat-routing" data-testid="chat-routing" aria-live="polite">
+            {routeQuestion ? <>
+              <span className="chat-routing-question">{routeQuestion.question}</span>
+              {routeQuestion.candidates.map(candidate => <button type="button" onMouseDown={event => event.preventDefault()} key={candidate.id} disabled={busy} onClick={() => void submit({ mode: 'continue', taskId: candidate.id })}>继续：{candidate.title}</button>)}
+              <button type="button" onMouseDown={event => event.preventDefault()} disabled={busy} onClick={() => void submit({ mode: 'new' })}>作为新任务发送</button>
+            </> : <>
+              <span>{busy ? '正在确定任务归属…' : selectedTask ? `继续：${selectedTask.title}` : '结合最近对话自动关联任务'}</span>
+              <button type="button" onMouseDown={event => event.preventDefault()} disabled={busy || uploadingAttachments || !draft.trim()} onClick={() => void submit({ mode: 'new' })}>作为新任务发送</button>
+              {routeNotice && <button type="button" onMouseDown={event => event.preventDefault()} data-testid="chat-route-notice" onClick={() => { setSelected(routeNotice.taskId); setView('chat'); }}>{routeNotice.routing === 'continued' ? '已继续' : '已新建'}：{routeNotice.title}</button>}
+            </>}
+          </div>}
+          <div className="composer"><input ref={attachmentInputRef} className="attachment-input" data-testid="attachment-input" type="file" disabled={busy} multiple accept=".txt,.md,.markdown,.csv,.tsv,.json,.yaml,.yml,.xml,.html,.htm,.css,.js,.jsx,.ts,.tsx,.py,.go,.rs,.java,.sql,.sh,.toml,.ini,.log,.c,.h,.cpp,.hpp" onChange={event => void uploadAttachments(event.currentTarget.files)} /><button className="attachment-button" data-testid="attachment-button" type="button" onMouseDown={event => event.preventDefault()} aria-label="添加附件" title="添加附件" disabled={busy || uploadingAttachments || pendingAttachments.length >= 5} onClick={() => attachmentInputRef.current?.click()}><svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg></button><textarea data-testid="task-composer" ref={composerRef} value={draft} disabled={busy} onChange={e => { setDraft(e.target.value); setRouteQuestion(null); }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void submit(); } }} placeholder={view === 'home' ? 'Ask ChatGPT' : 'Type a message'} /><DictationButton draft={draft} setDraft={value => { if (!submissionController.current) setDraft(value); }} onError={setError} textareaRef={composerRef} /><div className="composer-bottom"><label>内核 <select data-testid="engine-select" disabled={busy} value={engine} onChange={e => setEngine(e.target.value as Engine)}>{selectableEngines.map(id => <option key={id} value={id} disabled={state.remoteEngines.includes(id) && !state.availableEngines.includes(id)}>{engineText[id]}{state.availableEngines.includes(id) ? '' : ' · 未配置'}</option>)}</select></label><label className="schedule-toggle"><input type="checkbox" disabled={busy} checked={schedule} onChange={e => setSchedule(e.target.checked)} /> 定期检查</label><button className="voice-call-launch" data-testid="voice-call-launch" type="button" onMouseDown={event => event.preventDefault()} aria-label={`拨打 ${state.profile.name}`} title={`拨打 ${state.profile.name}`} onClick={startDotCall}><svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true"><path d="M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg></button><button className="send" onMouseDown={event => event.preventDefault()} disabled={!stateLoaded || busy || uploadingAttachments || !draft.trim() || (state.remoteEngines.includes(engine) && !state.availableEngines.includes(engine))} onClick={() => void submit()}>↑</button></div>{schedule && <RecurrenceEditor frequency={frequency} setFrequency={setFrequency} minutes={minutes} setMinutes={setMinutes} time={scheduleTime} setTime={setScheduleTime} timeZone={scheduleTimeZone} setTimeZone={setScheduleTimeZone} weekdays={scheduleWeekdays} setWeekdays={setScheduleWeekdays} endDate={scheduleEndDate} setEndDate={setScheduleEndDate} />}</div><small className="hint" data-testid="composer-hint">{engineAvailabilityHint(state, engine)}</small></div>
       </section>{view === 'computer' ? <aside className="computer-split" data-testid="computer-split"><header className="computer-pane-header"><div><strong>{state.profile.name} 的电脑</strong><span>点击画面接管 · 点击画面外交还给 {state.profile.name}</span></div><button type="button" aria-label="关闭电脑分栏" title="关闭电脑分栏" onClick={() => void closeComputer()}>×</button></header><ComputerView ref={computerRef} key={authContext.tenant.id} dotName={state.profile.name} localComputerEnabled={state.computerAccess.localComputer} onManageAccess={() => setComputerAccessOpen(true)} onError={setError} /></aside> : view === 'chat' && selectedPageId ? <div className="scratchpad-page-split" data-testid="scratchpad-page-split"><ScratchpadNavigationPane tenantId={authContext.tenant.id} selectedPageId={selectedPageId} refreshKey={pageIndexVersion} onOpen={setSelectedPageId} onBack={() => { setSelectedPageId(null); setView('pages'); }} /><PagePane pageId={selectedPageId} tenantId={authContext.tenant.id} onBack={() => { setSelectedPageId(null); setView('pages'); }} onPageUpdated={() => setPageIndexVersion(version => version + 1)} /></div> : view === 'chat' && (selectedTask || entries.length > 0) && <DotContextPanel profile={state.profile} state={state} tenantId={authContext.tenant.id} onOpenComputer={openComputer} onStartCall={startDotCall} onOpenSlack={() => setSlackModalOpen(true)} onOpenDingTalk={() => setDingtalkModalOpen(true)} onSelectTask={taskId => { setSelected(taskId); setView('chat'); }} />}</div>}
       {view === 'pages' && (selectedPageId ? <PagePane pageId={selectedPageId} tenantId={authContext.tenant.id} full onBack={() => setSelectedPageId(null)} onPageUpdated={() => setPageIndexVersion(version => version + 1)} /> : <PagesView tenantId={authContext.tenant.id} onOpen={id => setSelectedPageId(id)} />)}
       {view === 'activity' && <ActivityView tenantId={authContext.tenant.id} profileName={state.profile.name} state={state} stateLoaded={stateLoaded} onSelectTask={taskId => { setSelected(taskId); setView('chat'); }} onOpenPage={openPage} />}

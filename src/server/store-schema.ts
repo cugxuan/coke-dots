@@ -151,6 +151,21 @@ export function initializeStoreSchema(db: DatabaseSync) {
   addColumnIfMissing('tasks', 'parent_task_id', 'TEXT');
   addColumnIfMissing('tasks', 'created_by_user_id', 'TEXT REFERENCES users(id)');
   addColumnIfMissing('tasks', 'automation_profile', 'TEXT');
+  addColumnIfMissing('tasks', 'followup_message', 'TEXT');
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS chat_focus (
+      tenant_id TEXT NOT NULL, user_id TEXT NOT NULL, task_id TEXT NOT NULL,
+      revision INTEGER NOT NULL, updated_at TEXT NOT NULL,
+      PRIMARY KEY(tenant_id,user_id)
+    );
+    CREATE TABLE IF NOT EXISTS chat_message_receipts (
+      tenant_id TEXT NOT NULL, user_id TEXT NOT NULL, message_id TEXT NOT NULL,
+      payload_hash TEXT NOT NULL, task_id TEXT NOT NULL, routing TEXT NOT NULL,
+      reason TEXT NOT NULL, created_at TEXT NOT NULL,
+      PRIMARY KEY(tenant_id,user_id,message_id)
+    );
+    CREATE INDEX IF NOT EXISTS tasks_chat_owner ON tasks(tenant_id,created_by_user_id,created_at DESC);
+  `);
   addColumnIfMissing('dingtalk_group_selections', 'corp_id', "TEXT NOT NULL DEFAULT ''");
   const monitorColumns = db.prepare('PRAGMA table_info(dingtalk_group_monitors)').all() as { name: string }[];
   const hadDingtalkMonitorKeywords = monitorColumns.some(column => column.name === 'keywords_json');

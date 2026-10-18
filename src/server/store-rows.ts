@@ -14,6 +14,7 @@ export function toTask(r: Record<string, unknown>): Task {
     ...(execution ? { execution } : {}),
     id: String(r.id), tenantId: String(r.tenant_id), parentTaskId: r.parent_task_id == null ? null : String(r.parent_task_id), title: String(r.title), instruction: String(r.instruction),
     engine: r.engine as TaskEngine, agentSessionId: r.agent_session_id == null ? null : String(r.agent_session_id),
+    followupMessage: r.followup_message == null ? null : String(r.followup_message),
     status: r.status as TaskStatus, priority: Number(r.priority),
     nextRunAt: r.next_run_at == null ? null : String(r.next_run_at),
     scheduleMinutes: scheduleMinutes !== null ? scheduleMinutes : scheduleSpec?.frequency === 'interval' ? scheduleSpec.intervalMinutes : null,

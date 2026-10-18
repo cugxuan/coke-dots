@@ -55,6 +55,7 @@ export interface Task {
   execution?: TaskExecution;
   title: string;
   instruction: string;
+  followupMessage?: string | null;
   status: TaskStatus;
   priority: number;
   nextRunAt: string | null;
@@ -65,6 +66,11 @@ export interface Task {
   createdAt: string;
   updatedAt: string;
 }
+
+export interface ChatRouteChoice { id: string; title: string; status: TaskStatus }
+export type ChatMessageResult =
+  | { status: 'submitted'; task: Task; routing: 'new' | 'continued'; reason: string }
+  | { status: 'clarify'; question: string; candidates: ChatRouteChoice[] };
 
 export interface DotMemory {
   id: string;

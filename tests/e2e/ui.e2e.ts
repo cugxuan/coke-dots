@@ -1,3 +1,4 @@
+import { chatTaskRouting } from './scenarios/task-routing.ts';
 import { signedOutControls, signInAlpha, supportedEngines, themePreference, firstRunConversation, customizeAppearance, persistAppearance } from './scenarios/onboarding.ts';
 import { authenticatedEventStream, personalIsolation, createSharedWorkspace, inviteMember, revokeInvitations, switchTenant, restoreAfterRestart } from './scenarios/workspaces.ts';
 import { dictateAndSend } from './scenarios/dictation.ts';
@@ -127,8 +128,28 @@ async function startMockModel() {
         assert.equal(request.url, '/v1/chat/completions');
         const payload = JSON.parse(raw) as { messages?: { role: string; content: string }[] };
         const prompt = payload.messages?.find(message => message.role === 'user')?.content || '';
+        if (payload.messages?.some(message => message.role === 'system' && message.content.startsWith('You classify a new message'))) {
+          const data = JSON.parse(prompt) as { message: string; candidates: { id: string; title: string }[] };
+          const byd = data.candidates.find(candidate => candidate.title.includes('E2E BYD 信用报告'));
+          const route = data.message === '帮我列出来具体有哪些信息渠道查询了，哪些没有查询' && byd
+            ? { action: 'continue', taskId: byd.id, reason: '追问比亚迪报告的渠道覆盖' }
+            : data.message === '这份报告的来源呢？'
+              ? { action: 'clarify', question: '你指的是哪份报告？', taskIds: data.candidates.slice(0, 2).map(candidate => candidate.id) }
+              : { action: 'new', reason: '这是独立的新请求' };
+          response.writeHead(200, { 'content-type': 'application/json' });
+          response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(route) } }] }));
+          return;
+        }
         mockModelPrompts.push(prompt);
         mockModelRequests.push({ prompt, authorization: String(request.headers.authorization || '') });
+        if (prompt.includes('E2E BYD 信用报告') || prompt.includes('Task: 路由新话题：安排读书计划')) {
+          response.writeHead(200, { 'content-type': 'application/json' });
+          const text = prompt.includes('Task: 帮我列出来具体有哪些信息渠道查询了，哪些没有查询')
+            ? '渠道清单：A 已核验；B 尚未查询。沿用比亚迪报告，没有重跑调研。'
+            : prompt.includes('Task: 只总结这份报告') ? '已在原比亚迪任务内补充摘要。' : '比亚迪报告已完成：来源 A 已核验，来源 B 尚未查询。';
+          response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ status: 'done', message: text }) } }] }));
+          return;
+        }
         const hasReply = prompt.includes('User reply: Use Friday.');
         const isRecurringCheck = prompt.includes('E2E recurring run — verify due work reruns automatically');
         const isAutomationIdeas = prompt.includes('E2E automation ideas — ten ideas only');
@@ -693,9 +714,12 @@ async function createTask(page: Page, instruction: string, scheduled = false) {
     await page.locator('input.minutes').fill('60');
   }
   await page.getByTestId('task-composer').fill(instruction);
-  const submitted = page.waitForResponse(response => response.url().endsWith('/api/tasks') && response.request().method() === 'POST');
-  await page.locator('button.send').click();
-  const task = await (await submitted).json() as { id: string };
+  const submitted = page.waitForResponse(response => (response.url().endsWith('/api/tasks') || response.url().endsWith('/api/chat/messages')) && response.request().method() === 'POST');
+  const explicitNew = page.getByRole('button', { name: '作为新任务发送', exact: true });
+  if (!scheduled && await explicitNew.count()) await explicitNew.click();
+  else await page.locator('button.send').click();
+  const body = await (await submitted).json() as { id?: string; task?: { id: string } };
+  const task = body.task || { id: body.id! };
   await page.waitForFunction(() => document.querySelector<HTMLTextAreaElement>('[data-testid=task-composer]')?.value === '');
   await page.locator('.timeline .message.user p').filter({ hasText: instruction }).waitFor({ state: 'visible', timeout: 10_000 });
   const inlineTask = page.getByTestId(`task-progress-${task.id}`);
@@ -867,6 +891,8 @@ try {
   await recordStep('Scheduled view exposes a recurring task and its cancellation control', () => scheduleControls(scenarioContext));
 
   await recordStep('Alpha configures one shared Model API and Beta can read but cannot edit it', () => sharedModelPermissions(scenarioContext));
+
+  await recordStep('Chat routes a BYD follow-up, preserves its history and resolves ambiguity', () => chatTaskRouting(scenarioContext));
 
   await recordStep('A monitored DingTalk alert starts one isolated background task and ignores delivery retries', () => dingtalkAlerts(scenarioContext));
 
