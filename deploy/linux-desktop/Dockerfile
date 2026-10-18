@@ -33,6 +33,7 @@ COPY --chmod=0644 deploy/linux-desktop/renderer-health.mjs /opt/coke-dots/render
 COPY --chmod=0644 deploy/linux-desktop/agent-runtime.mjs /opt/coke-dots/agent-runtime.mjs
 COPY --chmod=0644 deploy/linux-desktop/agent-progress.mjs /opt/coke-dots/agent-progress.mjs
 COPY --chmod=0644 deploy/linux-desktop/cloud-kernel-adapter.mjs /opt/coke-dots/cloud-kernel-adapter.mjs
+COPY --chmod=0644 deploy/linux-desktop/task-delegation.mjs /opt/coke-dots/task-delegation.mjs
 COPY --chmod=0644 deploy/linux-desktop/browser-executor.mjs deploy/linux-desktop/browser-helpers.js deploy/linux-desktop/model-policy.mjs deploy/linux-desktop/agent-metrics.mjs deploy/linux-desktop/agent-limits.mjs /opt/coke-dots/
 COPY --chmod=0755 deploy/linux-desktop/incident-git-credential-helper.mjs /opt/coke-dots/incident-git-credential-helper.mjs
 COPY --chmod=0644 deploy/linux-desktop/incident-git-credential-server.mjs /opt/coke-dots/incident-git-credential-server.mjs

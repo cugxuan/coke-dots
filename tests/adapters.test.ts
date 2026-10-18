@@ -41,6 +41,23 @@ test('agent can create at most three bounded delegated tasks and children cannot
   assert.throws(() => parseDecision(JSON.stringify({ status: 'delegating', message: 'Recursive', delegations: [{ title: 'Child', instruction: 'Run recursively.' }] }), undefined, { allowDelegation: false }), /不能继续委派/);
 });
 
+test('delegation description aliases preserve all work without bypassing validation or permissions', () => {
+  const children = [
+    { title: '监管信息', instruction: '读取提供的监管材料。', engine: 'model' },
+    { title: '司法信息', description: '核查提供的司法材料。', engine: 'model' },
+    { title: '正面信息', description: '核查提供的奖励材料。', engine: 'model' },
+  ];
+  const raw = JSON.stringify({ status: 'delegating', message: '分工核查', delegations: children });
+  const result = parseDecision(raw, 'native-session', { availableEngines: ['model'] });
+  assert.equal(result.sessionId, 'native-session');
+  assert.deepEqual(result.delegations?.map(child => child.instruction), ['读取提供的监管材料。', '核查提供的司法材料。', '核查提供的奖励材料。']);
+  assert.throws(() => parseDecision(raw, undefined, { allowDelegation: false }), /不能继续委派/);
+  assert.throws(() => parseDecision(raw, undefined, { availableEngines: ['pi'] }), /不可用的内核/);
+  for (const child of [null, [], 'invalid', { title: 'Empty' }, { title: 'Long', description: 'x'.repeat(5001) }, { title: 'Invalid instruction', instruction: '', description: 'Do not silently replace this.' }]) {
+    assert.throws(() => parseDecision(JSON.stringify({ status: 'delegating', message: '核查', delegations: [children[0], child] })), /子任务内容无效/);
+  }
+});
+
 test('Pi selection persists and historical Claude tasks remain readable but are not selectable', () => {
   const directory = mkdtempSync(join(tmpdir(), 'coke-dots-engines-'));
   try {

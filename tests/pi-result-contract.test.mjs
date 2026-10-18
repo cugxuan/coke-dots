@@ -130,3 +130,52 @@ test('Pi respects cancellation during the formatting pass', async () => {
     await assert.rejects(run(), /fixture user takeover/); assert.equal(requests.length, 2);
   }, { signal: controller.signal });
 });
+
+test('Pi accepts mixed instruction/description delegation fields in one call before crossing the cloud boundary', async () => {
+  const delegations = [{ title: 'Source A', instruction: 'Analyze supplied A.' }, { title: 'Source B', description: 'Analyze supplied B.' }, { title: 'Source C', description: 'Analyze supplied C.' }];
+  await fixture([{ text: decision('分工核查', 'delegating', { delegations }) }], async ({ run, requests }) => {
+    const result = await run();
+    assert.equal(requests.length, 1);
+    assert.deepEqual(result.delegations.map(child => child.instruction), ['Analyze supplied A.', 'Analyze supplied B.', 'Analyze supplied C.']);
+    assert(result.delegations.every(child => !('description' in child)));
+  });
+});
+
+test('Pi repairs invalid child content in the same session without replaying tools or losing valid siblings', async () => {
+  const children = [{ title: 'Source A', instruction: 'Analyze A.' }, { title: 'B'.repeat(121), instruction: 'Analyze B.' }];
+  await fixture([
+    { tools: bash("printf 'saved evidence\\n' >> partial.txt") },
+    { text: decision('分工核查', 'delegating', { delegations: children }) },
+    { text: decision('分工核查', 'delegating', { delegations: [children[0], { ...children[1], title: 'Source B' }] }) },
+  ], async ({ run, requests, cwd }) => {
+    const result = await run({ prompt: 'Save evidence once, then delegate analysis of sources A and B.' });
+    assert.equal(requests.length, 3);
+    assert(!requests[2].tools?.length);
+    assert.match(JSON.stringify(requests[2].messages.at(-1)), /第 2 项需要 title/);
+    assert.deepEqual(result.delegations.map(child => child.instruction), ['Analyze A.', 'Analyze B.']);
+    assert.equal(await readFile(path.join(cwd, 'partial.txt'), 'utf8'), 'saved evidence\n');
+  });
+});
+
+test('Pi stops after one unsuccessful delegation repair instead of an unbounded retry loop', async () => {
+  const invalid = decision('分工核查', 'delegating', { delegations: [null] });
+  await fixture([{ text: invalid }, { text: invalid }], async ({ run, requests }) => {
+    await assert.rejects(run(), /任务结果格式整理失败/);
+    assert.equal(requests.length, 2);
+  });
+});
+
+test('Pi continues after a failed source tool and retains a real CSV from the successful source', async () => {
+  await fixture([
+    { tools: bash("printf 'Source A unavailable: HTTP 503\\n' >&2; exit 1") },
+    { tools: bash("printf 'source,finding\\nB,verified fixture evidence\\n' > findings.csv") },
+    { text: decision('已保存 B 的核实结果到 findings.csv；A 返回 HTTP 503，需人工补查，未检出不等于无风险。') },
+  ], async ({ run, requests, cwd }) => {
+    const result = await run({ prompt: 'Query independent fixture sources A and B; preserve successful evidence and report unavailable sources.' });
+    assert.equal(result.status, 'done');
+    assert.match(result.message, /A 返回 HTTP 503/);
+    assert.equal(requests.length, 3);
+    assert.match(JSON.stringify(requests[1].messages), /Source A unavailable/);
+    assert.equal(await readFile(path.join(cwd, 'findings.csv'), 'utf8'), 'source,finding\nB,verified fixture evidence\n');
+  });
+});

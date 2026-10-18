@@ -941,7 +941,9 @@ export class Store {
       const parents = this.db.prepare("SELECT id,tenant_id FROM tasks WHERE status='delegating'").all() as { id: string; tenant_id: string }[];
       let released = 0;
       for (const parent of parents) {
-        const state = this.db.prepare("SELECT COUNT(*) AS total,SUM(CASE WHEN status IN ('done','failed','stopped') THEN 1 ELSE 0 END) AS terminal FROM tasks WHERE tenant_id=? AND parent_task_id=?")
+        // A child awaiting source access must not hold completed siblings hostage.
+        // Paused/running children still require explicit continuation/completion.
+        const state = this.db.prepare("SELECT COUNT(*) AS total,SUM(CASE WHEN status IN ('done','failed','stopped','waiting') THEN 1 ELSE 0 END) AS terminal FROM tasks WHERE tenant_id=? AND parent_task_id=?")
           .get(parent.tenant_id, parent.id) as { total: number; terminal: number | null };
         if (!state.total || state.terminal !== state.total) continue;
         const changed = this.db.prepare("UPDATE tasks SET status='queued',next_run_at=?,updated_at=? WHERE tenant_id=? AND id=? AND status='delegating'")
@@ -949,7 +951,7 @@ export class Store {
         if (!Number(changed.changes)) continue;
         const children = this.delegatedTasks(parent.id, parent.tenant_id);
         this.db.prepare('INSERT INTO entries(tenant_id,task_id,kind,body,created_at) VALUES (?,?,?,?,?)')
-          .run(parent.tenant_id, parent.id, 'system', `所有 ${children.length} 项子任务均已结束；主任务正在汇总结果。`, now);
+          .run(parent.tenant_id, parent.id, 'system', `所有 ${children.length} 项子任务已返回结果或阻塞原因；主任务正在汇总已取得的信息和未完成事项。`, now);
         released++;
       }
       this.db.exec('COMMIT');

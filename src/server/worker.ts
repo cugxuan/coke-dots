@@ -158,10 +158,11 @@ export class Worker {
         : decision.status === 'scheduled' ? new Date(Date.now() + nextMinutes * 60_000).toISOString() : null;
       const status = shouldContinueSchedule ? nextRunAt ? 'scheduled' : 'done' : decision.status;
       const actionRule = this.store.tenantActionRule(task.tenantId);
-      let outputMessage = decision.message;
+      const resultMessage = withDelegationGaps(decision.message, children);
+      let outputMessage = resultMessage;
       if (decision.pageAction) {
         if (actionRule?.mode === 'ask-before') {
-          this.store.requestPageActionApproval(task.tenantId, task.id, decision.pageAction, decision.message, status === 'scheduled' ? 'scheduled' : 'done', nextRunAt, decision.sessionId || current.agentSessionId);
+          this.store.requestPageActionApproval(task.tenantId, task.id, decision.pageAction, resultMessage, status === 'scheduled' ? 'scheduled' : 'done', nextRunAt, decision.sessionId || current.agentSessionId);
           this.notifyIfEnabled(task.tenantId, `“${task.title}”正在等待你批准 Scratchpad 页面写入。`);
           this.onChange();
           return;
@@ -214,7 +215,7 @@ export class Worker {
         }
       }
       this.store.updateTask(task.id, {
-        status, result: decision.status === 'done' ? decision.message : current.result,
+        status, result: decision.status === 'done' || (task.parentTaskId && decision.status === 'waiting') ? resultMessage : current.result,
         nextRunAt, error: null, agentSessionId: decision.sessionId || current.agentSessionId,
       }, task.tenantId);
       this.store.addEntry('dot', outputMessage, task.id, task.tenantId);
@@ -248,6 +249,17 @@ export class Worker {
     try { this.notify(this.store.getProfile(tenantId).name, body); }
     catch { /* A desktop notification must never stop background work. */ }
   }
+}
+
+function withDelegationGaps(message: string, children: Task[]): string {
+  const incomplete = children.filter(child => child.status !== 'done');
+  if (!incomplete.length) return message;
+  const states: Record<string, string> = { failed: '执行失败', waiting: '待补查', stopped: '已停止', paused: '已暂停' };
+  const gaps = incomplete.map(child => {
+    const reason = child.error || child.result || '未取得可用结果';
+    return `- ${child.title}（${states[child.status] || child.status}）：${reason.slice(0, 600)}`;
+  });
+  return `${message}\n\n未完成的子任务（不代表未发现问题）：\n${gaps.join('\n')}`;
 }
 
 function explicitScratchpadRequest(instruction: string) {
