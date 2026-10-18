@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { negotiateQwenRealtime, qwenRealtimeConfig, qwenRealtimeEndpoint, VoiceProviderError, voiceProviderInfo } from '../src/server/voice-provider.ts';
+import { QWEN_AUDIO_REALTIME_MODEL, QWEN_REALTIME_MODEL, qwenSessionConfig } from '../src/shared/qwen-realtime.ts';
 
 const offer = 'v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n';
 const answer = 'v=0\r\no=- 2 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n';
@@ -44,4 +45,24 @@ test('provider errors do not reveal upstream response bodies or credentials', as
   await assert.rejects(negotiateQwenRealtime('not-sdp', env(), failingFetcher), /offer SDP 无效/);
   await assert.rejects(negotiateQwenRealtime(offer, { ...env(), DOTS_QWEN_REGION: 'mars' }, failingFetcher), /地域无效/);
   await assert.rejects(negotiateQwenRealtime(offer, { ...env(), DOTS_QWEN_WORKSPACE_ID: 'invalid.host' }, failingFetcher), /工作空间 ID/);
+});
+
+test('Token Plan Audio 3.0 uses its own voice and built-in transcription over server-side WebRTC', async () => {
+  const config = { ...env(), DOTS_QWEN_WORKSPACE_ID: 'token-plan', DOTS_QWEN_MODEL: QWEN_AUDIO_REALTIME_MODEL };
+  assert.deepEqual(voiceProviderInfo(config), { provider: 'qwen', configured: true, model: QWEN_AUDIO_REALTIME_MODEL });
+  let requested = '';
+  await negotiateQwenRealtime(offer, config, async url => { requested = String(url); return new Response(answer); });
+  assert.equal(requested, 'https://token-plan.cn-beijing.maas.aliyuncs.com/api/v1/webrtc/realtime?model=qwen-audio-3.0-realtime-plus');
+  const audio = qwenSessionConfig(QWEN_AUDIO_REALTIME_MODEL, 'Dot');
+  assert('voice' in audio);
+  assert.equal(audio.voice, 'longanqian');
+  assert.equal('input_audio_transcription' in audio, false);
+  assert.equal('audio' in audio, false);
+  assert.equal(audio.turn_detection.type, 'server_vad');
+  const omni = qwenSessionConfig(QWEN_REALTIME_MODEL, 'Dot');
+  assert('audio' in omni);
+  assert.equal(omni.audio.output.voice, 'Tina');
+  assert.equal(omni.input_audio_transcription.model, 'qwen3-asr-flash-realtime');
+  assert.throws(() => qwenRealtimeConfig({ ...config, DOTS_QWEN_MODEL: 'unknown-model' }), /模型不受支持/);
+  assert.equal(voiceProviderInfo({ ...config, DOTS_QWEN_MODEL: 'unknown-model' }).configured, false);
 });

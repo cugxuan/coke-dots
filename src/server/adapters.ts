@@ -3,6 +3,7 @@ import { createRequire } from 'node:module';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { type DotMemoryAction, type Engine, type ScratchpadPageAction, type TenantActionRule } from '../shared/types.ts';
 import { effectiveModelConfig } from './model-settings.ts';
+import { nonThinkingParameters } from '../../deploy/linux-desktop/model-policy.mjs';
 import type { AgentProgress } from '../shared/types.ts';
 import { createPiProgressReporter, tokenUsage } from '../../deploy/linux-desktop/agent-progress.mjs';
 import { parseDelegations } from '../../deploy/linux-desktop/task-delegation.mjs';
@@ -198,7 +199,7 @@ export const adapters: Record<Engine, AgentAdapter> = {
         const response = await fetch(`${config.baseUrl}/chat/completions`, {
           method: 'POST',
           headers: { 'content-type': 'application/json', authorization: `Bearer ${config.apiKey}` },
-          body: JSON.stringify({ model: config.model, temperature: 0.2, messages: [{ role: 'system', content: instruction }, { role: 'user', content: formatAgentPrompt(input) }] }),
+          body: JSON.stringify({ model: config.model, temperature: 0.2, ...nonThinkingParameters(config), messages: [{ role: 'system', content: instruction }, { role: 'user', content: formatAgentPrompt(input) }] }),
           signal: input.signal ? AbortSignal.any([controller.signal, input.signal]) : controller.signal,
         });
         if (!response.ok) throw new Error(`模型服务返回 HTTP ${response.status}`);

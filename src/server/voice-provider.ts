@@ -1,10 +1,11 @@
 import { volcengineVoiceInfo } from './volcengine-voice.ts';
+import { QWEN_AUDIO_REALTIME_MODEL, QWEN_REALTIME_MODEL, type QwenRealtimeModel } from '../shared/qwen-realtime.ts';
 
-export const QWEN_REALTIME_MODEL = 'qwen3.8-omni-flash-realtime';
+export { QWEN_REALTIME_MODEL } from '../shared/qwen-realtime.ts';
 const MAX_SDP_BYTES = 80_000;
 
 export type VoiceProviderInfo = { provider: 'browser' | 'qwen' | 'volcengine' | 'unsupported'; configured: boolean; model?: string };
-export type QwenRealtimeConfig = { apiKey: string; workspaceId: string; region: 'beijing' | 'singapore'; model: typeof QWEN_REALTIME_MODEL };
+export type QwenRealtimeConfig = { apiKey: string; workspaceId: string; region: 'beijing' | 'singapore'; model: QwenRealtimeModel };
 
 export class VoiceProviderError extends Error {
   constructor(message: string, readonly status: number) { super(message); }
@@ -16,8 +17,8 @@ export function voiceProviderInfo(env: NodeJS.ProcessEnv = process.env): VoicePr
   if (selected === 'volcengine') return volcengineVoiceInfo(env);
   if (selected !== 'qwen') return { provider: 'unsupported', configured: false };
   try {
-    qwenRealtimeConfig(env);
-    return { provider: 'qwen', configured: true, model: QWEN_REALTIME_MODEL };
+    const config = qwenRealtimeConfig(env);
+    return { provider: 'qwen', configured: true, model: config.model };
   } catch {
     return { provider: 'qwen', configured: false, model: QWEN_REALTIME_MODEL };
   }
@@ -26,11 +27,13 @@ export function voiceProviderInfo(env: NodeJS.ProcessEnv = process.env): VoicePr
 export function qwenRealtimeConfig(env: NodeJS.ProcessEnv = process.env): QwenRealtimeConfig {
   const apiKey = (env.DOTS_QWEN_API_KEY || env.DASHSCOPE_API_KEY || '').trim();
   const workspaceId = (env.DOTS_QWEN_WORKSPACE_ID || '').trim();
+  const model = (env.DOTS_QWEN_MODEL || QWEN_REALTIME_MODEL).trim();
   const region = env.DOTS_QWEN_REGION === 'singapore' ? 'singapore' : env.DOTS_QWEN_REGION === 'beijing' || !env.DOTS_QWEN_REGION ? 'beijing' : null;
   if (!apiKey || apiKey.length > 4096) throw new VoiceProviderError('Qwen 实时语音尚未配置 API Key', 503);
   if (!workspaceId || !/^[a-zA-Z0-9_-]{3,100}$/.test(workspaceId)) throw new VoiceProviderError('Qwen 实时语音尚未配置有效的工作空间 ID', 503);
   if (!region) throw new VoiceProviderError('Qwen 实时语音地域无效', 503);
-  return { apiKey, workspaceId, region, model: QWEN_REALTIME_MODEL };
+  if (model !== QWEN_REALTIME_MODEL && model !== QWEN_AUDIO_REALTIME_MODEL) throw new VoiceProviderError('Qwen 实时语音模型不受支持', 503);
+  return { apiKey, workspaceId, region, model };
 }
 
 export function qwenRealtimeEndpoint(config: QwenRealtimeConfig): string {

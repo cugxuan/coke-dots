@@ -1,4 +1,5 @@
 import { effectiveModelConfig } from './model-settings.ts';
+import { nonThinkingParameters } from '../../deploy/linux-desktop/model-policy.mjs';
 import type { TaskStatus } from '../shared/types.ts';
 
 export interface RoutingCandidate {
@@ -59,12 +60,10 @@ export function parseTaskRoute(text: string, candidates: RoutingCandidate[]): Ta
 export async function classifyTaskMessage(tenantId: string, message: string, context: RoutingContext, signal?: AbortSignal): Promise<TaskRoute> {
   const config = effectiveModelConfig(tenantId);
   if (!config) throw new Error('Routing model unavailable');
-  const host = new URL(config.baseUrl).hostname;
-  const deepseekThinking = (host === 'api.deepseek.com' || host.endsWith('.volces.com')) && /^deepseek-(?:v[34]|flash|chat)/i.test(config.model);
   const response = await fetch(`${config.baseUrl}/chat/completions`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${config.apiKey}` },
-    body: JSON.stringify({ model: config.model, temperature: 0, max_tokens: 800, ...(deepseekThinking ? { thinking: { type: 'disabled' } } : {}),
+    body: JSON.stringify({ model: config.model, temperature: 0, max_tokens: 800, ...nonThinkingParameters(config),
       messages: [{ role: 'system', content: taskRoutingInstruction }, { role: 'user', content: JSON.stringify({ message, ...context }) }] }),
     signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(15_000)]) : AbortSignal.timeout(15_000),
   });

@@ -1,9 +1,24 @@
 import { Type } from 'typebox';
 
+function thinkingFormat(config) {
+  const host = new URL(config.baseUrl).hostname;
+  if ((host === 'api.deepseek.com' || host.endsWith('.volces.com')) && /^deepseek-(?:v[34]|flash|chat)/i.test(config.model)) return 'deepseek';
+  const aliyun = ['dashscope.aliyuncs.com', 'dashscope-intl.aliyuncs.com'].includes(host)
+    || /^[a-z0-9_-]+\.(?:cn-beijing|ap-southeast-1)\.maas\.aliyuncs\.com$/.test(host);
+  if (aliyun && /^deepseek-v4/i.test(config.model)) return 'qwen';
+  return null;
+}
+
+export function nonThinkingParameters(config) {
+  const format = thinkingFormat(config);
+  return format === 'qwen' ? { enable_thinking: false } : format === 'deepseek' ? { thinking: { type: 'disabled' } } : {};
+}
+
 export function modelProfile(config) {
   const host = new URL(config.baseUrl).hostname;
   // Only select provider-specific thinking fields for verified provider/model families.
-  const deepseek = (host === 'api.deepseek.com' || host.endsWith('.volces.com')) && /^deepseek-(?:v[34]|flash|chat)/i.test(config.model);
+  const format = thinkingFormat(config);
+  const deepseek = Boolean(format);
   const vision = host.endsWith('.volces.com') && /^deepseek-v4/i.test(config.model);
   return {
     id: config.model, name: config.model, reasoning: deepseek,
@@ -12,7 +27,7 @@ export function modelProfile(config) {
     // Deliberate working budget, not the provider's maximum context capacity.
     contextWindow: 40_000, maxTokens: 8_192,
     ...(deepseek ? { thinkingLevelMap: { minimal: 'high', low: 'high', medium: 'high', high: 'high', xhigh: 'max' } } : {}),
-    compat: { supportsDeveloperRole: false, maxTokensField: 'max_tokens', ...(deepseek ? { thinkingFormat: 'deepseek' } : {}) },
+    compat: { supportsDeveloperRole: false, maxTokensField: 'max_tokens', ...(format ? { thinkingFormat: format } : {}) },
   };
 }
 

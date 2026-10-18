@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { test } from 'node:test';
 import { streamSimple } from '@mariozechner/pi-ai';
-import { modelProfile, boundedToolContext } from '../deploy/linux-desktop/model-policy.mjs';
+import { modelProfile, boundedToolContext, nonThinkingParameters } from '../deploy/linux-desktop/model-policy.mjs';
 
 test('real Pi transport sends provider thinking off/on and preserves generic gateway compatibility', async () => {
   const requests = [];
@@ -26,6 +26,16 @@ test('real Pi transport sends provider thinking off/on and preserves generic gat
     const generic = { ...modelProfile({ baseUrl: 'https://example.test/v1', model: 'custom' }), baseUrl, api: 'openai-completions', provider: 'coke-dots-shared' };
     await streamSimple(generic, { messages: [{ role: 'user', content: 'ok', timestamp: Date.now() }] }, { apiKey: 'fixture', reasoning: 'off' }).result();
     assert.equal(requests[3].thinking, undefined, 'Unknown gateways do not receive DeepSeek fields');
+    const aliyunConfig = { baseUrl: 'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1', model: 'deepseek-v4.1-flash' };
+    const aliyun = { ...modelProfile(aliyunConfig), baseUrl, api: 'openai-completions', provider: 'coke-dots-shared' };
+    for (const reasoning of ['off', 'high', 'off']) {
+      const result = await streamSimple(aliyun, { messages: [{ role: 'user', content: 'ok', timestamp: Date.now() }] }, { apiKey: 'fixture', reasoning }).result();
+      assert.equal(result.stopReason, 'stop');
+    }
+    assert.deepEqual(requests.slice(4).map(r => r.enable_thinking), [false, true, false]);
+    assert(requests.slice(4).every(r => r.thinking === undefined));
+    assert.deepEqual(nonThinkingParameters(aliyunConfig), { enable_thinking: false });
+    assert.deepEqual(nonThinkingParameters({ ...aliyunConfig, baseUrl: 'https://token-plan.cn-beijing.maas.aliyuncs.com.example.test/v1' }), {});
   } finally { await new Promise(resolve => server.close(resolve)); }
 });
 

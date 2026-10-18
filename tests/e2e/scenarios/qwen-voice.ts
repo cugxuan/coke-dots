@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import type { UiScenarioContext } from '../ui.e2e.ts';
 
-export async function qwenWebRtc(ctx: UiScenarioContext) {
+export async function qwenWebRtc(ctx: UiScenarioContext, model = 'qwen3.8-omni-flash-realtime') {
   ctx.mockQwenSignalingUrl = await ctx.startMockQwenSignaling();
   await ctx.stopServer(ctx.server);
   ctx.server = await ctx.startServer(ctx.e2ePort, {
     DOTS_VOICE_PROVIDER: 'qwen',
+    DOTS_QWEN_MODEL: model,
     DOTS_QWEN_API_KEY: '',
     DOTS_QWEN_WORKSPACE_ID: '',
     DOTS_QWEN_REGION: '',
@@ -22,6 +23,7 @@ export async function qwenWebRtc(ctx: UiScenarioContext) {
   await ctx.stopServer(ctx.server);
   ctx.server = await ctx.startServer(ctx.e2ePort, {
     DOTS_VOICE_PROVIDER: 'qwen',
+    DOTS_QWEN_MODEL: model,
     DOTS_QWEN_API_KEY: 'e2e-qwen-secret',
     DOTS_QWEN_WORKSPACE_ID: 'e2e-workspace',
     DOTS_QWEN_REGION: 'beijing',
@@ -93,14 +95,18 @@ export async function qwenWebRtc(ctx: UiScenarioContext) {
   });
   assert.equal(microphoneAttachedAfterSetup, true, 'The microphone should attach only after model configuration is acknowledged');
   const config = await ctx.alphaPage!.evaluate(async () => await fetch('/api/voice/provider').then(response => response.json())) as { provider: string; configured: boolean; apiKey?: string };
-  assert.deepEqual(config, { provider: 'qwen', configured: true, model: 'qwen3.8-omni-flash-realtime' });
+  assert.deepEqual(config, { provider: 'qwen', configured: true, model });
   assert.equal(ctx.mockQwenSignalingRequests.length, 1, 'The browser must complete server-side Qwen SDP negotiation before listening');
   assert.deepEqual(ctx.mockQwenSignalingRequests[0], {
     authorization: 'Bearer e2e-qwen-secret', contentType: 'application/sdp',
     sdp: ['v=0', 'o=- 1 1 IN IP4 127.0.0.1', 's=-', 't=0 0', ''].join(String.fromCharCode(13, 10)),
   });
-  const sessionUpdate = await ctx.alphaPage!.evaluate(() => (window as unknown as { __dotsQwenSentEvents: { type: string; session?: { input_audio_transcription?: { model?: string }; turn_detection?: { type?: string } } }[] }).__dotsQwenSentEvents.find(event => event.type === 'session.update'));
-  assert.equal(sessionUpdate?.session?.input_audio_transcription?.model, 'qwen3-asr-flash-realtime');
+  const sessionUpdate = await ctx.alphaPage!.evaluate(() => (window as unknown as { __dotsQwenSentEvents: { type: string; session?: { voice?: string; audio?: unknown; input_audio_transcription?: { model?: string }; turn_detection?: { type?: string } } }[] }).__dotsQwenSentEvents.find(event => event.type === 'session.update'));
+  if (model === 'qwen-audio-3.0-realtime-plus') {
+    assert.equal(sessionUpdate?.session?.voice, 'longanqian');
+    assert.equal(sessionUpdate?.session?.audio, undefined);
+    assert.equal(sessionUpdate?.session?.input_audio_transcription, undefined);
+  } else assert.equal(sessionUpdate?.session?.input_audio_transcription?.model, 'qwen3-asr-flash-realtime');
   assert.equal(sessionUpdate?.session?.turn_detection?.type, 'server_vad');
   await call.getByRole('button', { name: '静音' }).click();
   assert.equal(await ctx.alphaPage!.evaluate(() => (window as unknown as { __dotsQwenFakeTrack: { enabled: boolean } }).__dotsQwenFakeTrack.enabled), false, 'Mute must disable the live microphone track');

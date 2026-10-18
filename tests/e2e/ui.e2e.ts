@@ -294,6 +294,7 @@ async function startMockSlackProvider() {
 }
 
 async function startMockQwenSignaling() {
+  if (mockQwenSignalingServer) await new Promise<void>(resolvePromise => mockQwenSignalingServer!.close(() => resolvePromise()));
   mockQwenSignalingRequests = [];
   mockQwenSignalingServer = createHttpServer((request, response) => {
     let raw = '';
@@ -947,6 +948,8 @@ try {
   await recordStep('Computer takeover performs real browser navigation, click, text input, and return', () => takeoverAndReturn(scenarioContext));
 
   await recordStep('Qwen WebRTC call sends Chinese speech to the tenant Agent and speaks its real task result', () => qwenWebRtc(scenarioContext));
+
+  await recordStep('Qwen Audio 3.0 call uses built-in transcription and speaks the tenant Agent result', () => qwenWebRtc(scenarioContext, 'qwen-audio-3.0-realtime-plus'));
 
   await recordStep('Volcano realtime WebSocket keeps credentials server-side and sends Chinese speech into the tenant Agent', () => volcanoRealtime(scenarioContext));
 

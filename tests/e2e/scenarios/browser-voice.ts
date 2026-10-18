@@ -11,6 +11,7 @@ export async function desktopVoiceCall(ctx: UiScenarioContext) {
   await ctx.alphaPage!.getByLabel('名字').fill('dot');
   await ctx.alphaPage!.getByRole('button', { name: '保存更改', exact: true }).click();
   assert.equal(await ctx.alphaPage!.getByLabel('名字').inputValue(), 'dot', 'The profile editor should show the saved Dot name');
+  await ctx.alphaPage!.getByRole('button', { name: '拨打 dot', exact: true }).waitFor({ state: 'visible' });
   const desktopViewport = ctx.alphaPage!.viewportSize();
   assert(desktopViewport, 'The desktop call E2E must use a fixed browser viewport');
   await ctx.alphaPage!.getByTestId('profile-voice-call-launch').click();

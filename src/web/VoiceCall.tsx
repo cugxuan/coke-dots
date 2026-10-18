@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { DotAppearance, Snapshot, Task, VoiceCallSession } from '../shared/types.ts';
 import { SpeechTurnCollector } from '../shared/speech-turn.ts';
 import { decodeVolcengineFloat32Pcm } from '../shared/volcengine-audio.ts';
+import { QWEN_REALTIME_MODEL, qwenSessionConfig } from '../shared/qwen-realtime.ts';
 import { appFetch, appPath, appWebSocketUrl } from './api.ts';
 import { DotAvatar } from './DotAvatar.tsx';
 import './voice-call.css';
@@ -127,6 +128,7 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
     const speechWindow = window as SpeechWindow;
     recognitionConstructorRef.current = speechWindow.SpeechRecognition || speechWindow.webkitSpeechRecognition || null;
     let qwenResponseActive = false;
+    let qwenModel: string = QWEN_REALTIME_MODEL;
     const qwenSpeechQueue: string[] = [];
     const processedVoiceTurns = new Set<string>();
     let qwenSessionCreated = false;
@@ -147,13 +149,7 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
       if (!qwenSessionCreated || qwenSessionUpdateSent || !channel || channel.readyState !== 'open') return;
       channel.send(JSON.stringify({
         type: 'session.update',
-        session: {
-          modalities: ['text', 'audio'],
-          instructions: `你是 ${dotName}，是 Coke Dots 的语音界面。请始终使用中文。用户说话时，你只做简短确认，并明确真实工作会交给独立的 Dots Agent 处理；不要自行回答任务内容、假称已完成或编造进度。稍后收到以“Dots Agent 状态更新”开头的文字时，只简短朗读其中状态。`,
-          audio: { output: { voice: 'Tina' } },
-          turn_detection: { type: 'server_vad', threshold: 0.5, silence_duration_ms: 700 },
-          input_audio_transcription: { model: 'qwen3-asr-flash-realtime' },
-        },
+        session: qwenSessionConfig(qwenModel, dotName),
       }));
       qwenSessionUpdateSent = true;
       setStatus('正在初始化语音模型…');
@@ -653,6 +649,7 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
         providerRef.current = selectedProvider;
         setVoiceProvider(selectedProvider);
         setVoiceModel(provider.model || '');
+        qwenModel = provider.model || QWEN_REALTIME_MODEL;
         volcDuplexRef.current = selectedProvider === 'volcengine' && provider.model === 'doubao-seedduplex-3.0';
         if (selectedProvider === 'qwen' && !provider.configured) throw new Error('服务端尚未配置 Qwen 实时语音所需的百炼 API Key 和工作空间 ID；地域默认使用北京。');
         if (selectedProvider === 'volcengine' && !provider.configured) throw new Error(provider.model === 'doubao-realtime-dialogue-2.0'

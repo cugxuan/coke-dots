@@ -80,6 +80,8 @@ Claude Code 不是可选引擎。旧任务记录中的 Claude 标识保留用于
 
 `DOTS_VOICE_PROVIDER` 可选 `browser`（默认）、`qwen` 或 `volcengine`。浏览器模式依赖浏览器的语音能力；外部实时语音需要相应服务凭据、服务开通状态和麦克风权限。麦克风功能需要安全上下文（HTTPS 或 localhost）。
 
+Qwen 使用 `DOTS_QWEN_API_KEY`、`DOTS_QWEN_WORKSPACE_ID` 和 `DOTS_QWEN_REGION`（默认 `beijing`）。`DOTS_QWEN_MODEL` 支持默认的 `qwen3.8-omni-flash-realtime` 或 `qwen-audio-3.0-realtime-plus`；应用按型号选择音色和转写参数。Token Plan 设置工作空间为 `token-plan`，语音模型为 `qwen-audio-3.0-realtime-plus`。修改语音环境变量后重启控制平面。API Key 始终留在服务端，浏览器通过应用接口交换 WebRTC SDP。
+
 火山引擎的 `DOTS_VOLCENGINE_API_KEY` 选择 SeedDuplex JSON 协议；旧协议使用 `DOTS_VOLCENGINE_APP_ID` 和 `DOTS_VOLCENGINE_ACCESS_TOKEN`。这些是服务端实例凭据，不能放进前端变量。保存了凭据不代表提供商已开通实时语音权限。
 
 Slack 需要单独的 OAuth App 配置。钉钉包含独立 DWS 连接器和 Stream 集成，详见[连接器说明](../deploy/dingtalk-connector/README.md)。普通登录和模型配置不会自动授予这些外部账号的访问权限。
