@@ -56,6 +56,18 @@ test('voice turn dispatch is durable, owner-scoped, and idempotent across task c
     assert.equal(store.getTask(first.task.id, beta.tenant.id), null);
     assert.throws(() => store.submitVoiceTurn({ ...request, tenantId: beta.tenant.id, userId: beta.user.id }), /语音通话不存在/);
 
+    assert.equal(store.voiceCallTaskText(alpha.tenant.id, alpha.user.id, call.id, first.task.id), null, 'Queued work is not a completed result');
+    store.updateTask(first.task.id, { status: 'done', result: '已完成，17 条记录。' }, alpha.tenant.id);
+    assert.equal(store.voiceCallTaskText(alpha.tenant.id, alpha.user.id, call.id, first.task.id), '已完成，17 条记录。');
+    assert.equal(store.voiceCallTaskText(beta.tenant.id, beta.user.id, call.id, first.task.id), null);
+    assert.equal(store.voiceCallTaskText(alpha.tenant.id, beta.user.id, call.id, first.task.id), null, 'Another user in the same workspace cannot request this call’s speech');
+    const unrelated = store.createTask('其他任务', null, 'pi', alpha.tenant.id);
+    store.updateTask(unrelated.id, { status: 'done', result: '其他任务的结果' }, alpha.tenant.id);
+    assert.equal(store.voiceCallTaskText(alpha.tenant.id, alpha.user.id, call.id, unrelated.id), null);
+    store.updateTask(first.task.id, { status: 'waiting' }, alpha.tenant.id);
+    store.addEntry('dot', '请告诉我日期。', first.task.id, alpha.tenant.id);
+    assert.equal(store.voiceCallTaskText(alpha.tenant.id, alpha.user.id, call.id, first.task.id), '请告诉我日期。', 'A clarification must not read a stale completed result');
+
     store.endVoiceCall(alpha.tenant.id, alpha.user.id, call.id, 10);
     store.close();
     store = new Store(directory);

@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import type { UiScenarioContext } from '../ui.e2e.ts';
 
+export const qwenLongVoiceResult = '逐条核验记录和资料来源，完整明细保留在聊天中。'.repeat(100) + '\n最终结论：17 条已核实，3 条仍待确认。';
+export const qwenLongVoiceSummary = '17 条记录已核实，3 条仍待确认。完整内容见聊天。';
+
 export async function qwenWebRtc(ctx: UiScenarioContext, model = 'qwen3.8-omni-flash-realtime') {
   ctx.mockQwenSignalingUrl = await ctx.startMockQwenSignaling();
   await ctx.stopServer(ctx.server);
@@ -45,8 +48,8 @@ export async function qwenWebRtc(ctx: UiScenarioContext, model = 'qwen3.8-omni-f
           const event = JSON.parse(raw);
           view.__dotsQwenSentEvents.push(event);
           if (event.type === 'response.create') {
-            view.__dotsQwenEventChannel?.emit({ type: 'response.created' });
-            window.setTimeout(() => view.__dotsQwenEventChannel?.emit({ type: 'response.done' }), 60);
+            view.__dotsQwenEventChannel?.emit({ type: 'response.created', response: { modalities: event.response.modalities } });
+            window.setTimeout(() => view.__dotsQwenEventChannel?.emit({ type: 'response.done', response: { modalities: event.response.modalities } }), 60);
           }
         }
         emit(event) { this.onmessage?.({ data: JSON.stringify(event) }); }
@@ -101,7 +104,9 @@ export async function qwenWebRtc(ctx: UiScenarioContext, model = 'qwen3.8-omni-f
     authorization: 'Bearer e2e-qwen-secret', contentType: 'application/sdp',
     sdp: ['v=0', 'o=- 1 1 IN IP4 127.0.0.1', 's=-', 't=0 0', ''].join(String.fromCharCode(13, 10)),
   });
-  const sessionUpdate = await ctx.alphaPage!.evaluate(() => (window as unknown as { __dotsQwenSentEvents: { type: string; session?: { voice?: string; audio?: unknown; input_audio_transcription?: { model?: string }; turn_detection?: { type?: string } } }[] }).__dotsQwenSentEvents.find(event => event.type === 'session.update'));
+  const sessionUpdate = await ctx.alphaPage!.evaluate(() => (window as unknown as { __dotsQwenSentEvents: { type: string; session?: { modalities?: string[]; voice?: string; audio?: unknown; input_audio_transcription?: { model?: string }; turn_detection?: { type?: string } } }[] }).__dotsQwenSentEvents.find(event => event.type === 'session.update'));
+  assert.deepEqual(sessionUpdate?.session?.modalities, ['text'], 'Automatic VAD responses cannot contain audio');
+  assert.equal(await ctx.alphaPage!.evaluate(() => (window as unknown as { __dotsQwenSentEvents: { type: string }[] }).__dotsQwenSentEvents.some(event => event.type === 'response.create')), false, 'No greeting or answer is generated before a Dot result');
   if (model === 'qwen-audio-3.0-realtime-plus') {
     assert.equal(sessionUpdate?.session?.voice, 'longanqian');
     assert.equal(sessionUpdate?.session?.audio, undefined);
@@ -120,11 +125,14 @@ export async function qwenWebRtc(ctx: UiScenarioContext, model = 'qwen3.8-omni-f
     const completed = { type: 'conversation.item.input_audio_transcription.completed', event_id: 'event-e2e-qwen-voice-turn-001', item_id: turnId, transcript };
     view.__dotsQwenEventChannel.emit(completed);
     view.__dotsQwenEventChannel.emit(completed);
-    view.__dotsQwenEventChannel.emit({ type: 'response.created' });
-    window.setTimeout(() => view.__dotsQwenEventChannel.emit({ type: 'response.done' }), 700);
+    view.__dotsQwenEventChannel.emit({ type: 'response.created', response: { modalities: ['text'] } });
+    window.setTimeout(() => view.__dotsQwenEventChannel.emit({ type: 'response.done', response: { modalities: ['text'] } }), 700);
   }, { transcript: voiceTurnTranscript, turnId: voiceTurnId });
   await ctx.alphaPage!.waitForFunction(() => document.querySelector('[data-testid="voice-call-transcript"]')?.getAttribute('data-task-status')?.includes('已完成') === true, null, { timeout: 20_000 });
   await ctx.alphaPage!.waitForFunction(() => (window as unknown as { __dotsQwenSentEvents?: { type: string; item?: { content?: { text?: string }[] } }[] }).__dotsQwenSentEvents?.some(event => event.type === 'conversation.item.create' && event.item?.content?.some(part => part.text?.includes('Voice response returned from the model.'))) === true, null, { timeout: 10_000 });
+  const spokenResponses = await ctx.alphaPage!.evaluate(() => (window as unknown as { __dotsQwenSentEvents: { type: string; response?: { modalities?: string[] } }[] }).__dotsQwenSentEvents.filter(event => event.type === 'response.create'));
+  assert.equal(spokenResponses.length, 1, 'Only the actual Dot result should be spoken');
+  assert.deepEqual(spokenResponses[0].response?.modalities, ['text', 'audio']);
   const agentPrompt = ctx.mockModelPrompts.find(prompt => prompt.includes('E2E voice response — speak actual task result')) || '';
   assert(agentPrompt, 'The recognized Chinese speech was not dispatched through the tenant Agent task path');
   const turnResult = await ctx.alphaPage!.evaluate(async ({ transcript, turnId }) => {
@@ -144,6 +152,13 @@ export async function qwenWebRtc(ctx: UiScenarioContext, model = 'qwen3.8-omni-f
     body: JSON.stringify({ transcript, turnId, engine: 'pi' }),
   })).status, { callId: turnResult.callId, transcript: voiceTurnTranscript, turnId: voiceTurnId });
   assert.equal(crossTenantTurnStatus, 404, 'A different tenant cannot inspect or replay another user’s voice turn');
+  const speechResponse = await ctx.alphaPage!.evaluate(async ({ callId, taskId }) => {
+    const response = await fetch(`/api/voice-calls/${callId}/speech`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ taskId }) });
+    return { status: response.status, body: await response.json() };
+  }, { callId: turnResult.callId, taskId: turnResult.task.id });
+  assert.deepEqual(speechResponse, { status: 200, body: { text: 'Voice response returned from the model.', summarized: false } });
+  const crossTenantSpeechStatus = await ctx.betaPage!.evaluate(async ({ callId, taskId }) => (await fetch(`/api/voice-calls/${callId}/speech`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ taskId }) })).status, { callId: turnResult.callId, taskId: turnResult.task.id });
+  assert.equal(crossTenantSpeechStatus, 404);
   const voiceTaskCheck = await ctx.alphaPage!.evaluate(async ({ transcript, callStartedAt }) => {
     const state = await fetch('/api/state').then(response => response.json()) as { tasks: { id: string; instruction: string; createdAt: string }[] };
     const tasks = state.tasks.filter(task => task.instruction === transcript && Date.parse(task.createdAt) >= Date.parse(callStartedAt));
@@ -152,11 +167,26 @@ export async function qwenWebRtc(ctx: UiScenarioContext, model = 'qwen3.8-omni-f
   assert.equal(voiceTaskCheck.taskId, turnResult.task.id, 'The replay response must reference the task started for this call');
   const voiceTaskCount = voiceTaskCheck.count;
   assert.equal(voiceTaskCount, 1, 'Repeated WebRTC transcript delivery must not start a second Agent task');
+  await ctx.alphaPage!.evaluate(() => {
+    const view = window as unknown as { __dotsQwenEventChannel: { emit(event: unknown): void } };
+    view.__dotsQwenEventChannel.emit({ type: 'input_audio_buffer.speech_started' });
+    view.__dotsQwenEventChannel.emit({ type: 'response.created', response: { modalities: ['text'] } });
+    view.__dotsQwenEventChannel.emit({ type: 'response.done', response: { modalities: ['text'] } });
+    view.__dotsQwenEventChannel.emit({ type: 'conversation.item.input_audio_transcription.completed', item_id: 'item-e2e-qwen-long-002', transcript: 'E2E voice long response — summarize actual task result' });
+  });
+  await ctx.alphaPage!.waitForFunction(summary => (window as unknown as { __dotsQwenSentEvents?: { type: string; item?: { content?: { text?: string }[] } }[] }).__dotsQwenSentEvents?.some(event => event.type === 'conversation.item.create' && event.item?.content?.some(part => part.text?.includes(summary))) === true, qwenLongVoiceSummary, { timeout: 20_000 });
+  const longResult = await ctx.alphaPage!.evaluate(async () => {
+    const state = await fetch('/api/state').then(response => response.json()) as { tasks: { instruction: string; result: string }[] };
+    return state.tasks.find(task => task.instruction === 'E2E voice long response — summarize actual task result')?.result;
+  });
+  assert.equal(longResult, qwenLongVoiceResult, 'The full result must remain in chat data while only the summary is spoken');
+  assert.equal(await ctx.alphaPage!.evaluate(() => (window as unknown as { __dotsQwenSentEvents: { type: string }[] }).__dotsQwenSentEvents.filter(event => event.type === 'response.create').length), 2);
   await ctx.screenshot(ctx.alphaPage!, 'qwen-realtime-call-agent-result');
   await call.getByRole('button', { name: '结束通话' }).click();
   assert.equal(await ctx.alphaPage!.evaluate(() => (window as unknown as { __dotsQwenFakeTrack: { stopped: boolean } }).__dotsQwenFakeTrack.stopped), true, 'Ending the call must stop the microphone track');
   const callHistory = await ctx.alphaPage!.evaluate(async () => await fetch('/api/voice-calls').then(response => response.json())) as { endedAt: string | null }[];
   assert(callHistory.some(item => item.endedAt), 'The Qwen call should be durably recorded when it ends');
+  assert.equal(await ctx.alphaPage!.evaluate(async ({ callId, taskId }) => (await fetch(`/api/voice-calls/${callId}/speech`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ taskId }) })).status, { callId: turnResult.callId, taskId: turnResult.task.id }), 404, 'Ended calls cannot start new speech preparation');
 
   await ctx.alphaPage!.evaluate("Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: { getUserMedia: async function () { throw new Error('E2E microphone permission denied'); } } })");
   await ctx.openProfile(ctx.alphaPage!);

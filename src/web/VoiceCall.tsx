@@ -3,6 +3,7 @@ import type { DotAppearance, Snapshot, Task, VoiceCallSession } from '../shared/
 import { SpeechTurnCollector } from '../shared/speech-turn.ts';
 import { decodeVolcengineFloat32Pcm } from '../shared/volcengine-audio.ts';
 import { QWEN_REALTIME_MODEL, qwenSessionConfig } from '../shared/qwen-realtime.ts';
+import { VOICE_SUMMARY_FALLBACK, VOICE_SUMMARY_THRESHOLD } from '../shared/voice-speech.ts';
 import { appFetch, appPath, appWebSocketUrl } from './api.ts';
 import { DotAvatar } from './DotAvatar.tsx';
 import './voice-call.css';
@@ -80,6 +81,7 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
   const onTranscriptRef = useRef(onTranscript);
   const waitingTaskIdRef = useRef<string | null>(null);
   const taskFollowStopsRef = useRef(new Set<() => void>());
+  const speechPreparationsRef = useRef(new Set<AbortController>());
   onTranscriptRef.current = onTranscript;
   mutedRef.current = muted;
   speakerRef.current = speakerOn;
@@ -98,6 +100,8 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
   }, [transcript, taskStatus, displayMode, mobileMinimized]);
 
   function stopRealtimeTransport() {
+    for (const controller of speechPreparationsRef.current) controller.abort();
+    speechPreparationsRef.current.clear();
     if (micStartupTimerRef.current !== null) {
       window.clearTimeout(micStartupTimerRef.current);
       micStartupTimerRef.current = null;
@@ -135,6 +139,7 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
     const speechWindow = window as SpeechWindow;
     recognitionConstructorRef.current = speechWindow.SpeechRecognition || speechWindow.webkitSpeechRecognition || null;
     let qwenResponseActive = false;
+    let qwenPendingInputTurns = 0;
     let qwenModel: string = QWEN_REALTIME_MODEL;
     const qwenSpeechQueue: string[] = [];
     const processedVoiceTurns = new Set<string>();
@@ -146,9 +151,10 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
     const volcSpeechQueue: string[] = [];
 
     const flushQwenSpeech = () => {
-      if (!qwenModelReady || qwenResponseActive) return;
-      const next = qwenSpeechQueue.shift();
-      if (next) sendQwenText(next);
+      if (!activeRef.current || !qwenModelReady || qwenResponseActive || qwenPendingInputTurns > 0) return;
+      if (!speakerRef.current) { qwenSpeechQueue.length = 0; return; }
+      const next = qwenSpeechQueue[0];
+      if (next && sendQwenText(next)) qwenSpeechQueue.shift();
     };
 
     const initializeQwenSession = () => {
@@ -167,14 +173,15 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
       if (!qwenModelReady || !channel || channel.readyState !== 'open') return false;
       channel.send(JSON.stringify({
         type: 'conversation.item.create',
-        item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: `播报内容：${text}\n请用简短、自然的中文朗读内容，不要读出标记、提及内部执行流程或添加未经证实的信息。` }] },
+        item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: `结果播报请求：请只自然朗读下方正文，不要读出字段名或添加任何内容。\n正文（JSON 字符串）：${JSON.stringify(text)}` }] },
       }));
-      channel.send(JSON.stringify({ type: 'response.create' }));
       qwenResponseActive = true;
+      channel.send(JSON.stringify({ type: 'response.create', response: { modalities: ['text', 'audio'] } }));
       return true;
     };
     const queueQwenSpeech = (text: string) => {
-      if (qwenResponseActive || !sendQwenText(text)) qwenSpeechQueue.push(text);
+      qwenSpeechQueue.push(text);
+      flushQwenSpeech();
     };
 
     function speak(text: string) {
@@ -206,6 +213,26 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
       window.speechSynthesis.speak(utterance);
     }
 
+    async function speakTaskResult(text: string, taskId: string) {
+      if (!activeRef.current || !speakerRef.current) return;
+      if (providerRef.current !== 'qwen' || text.trim().length <= VOICE_SUMMARY_THRESHOLD) { speak(text); return; }
+      const callId = sessionRef.current?.id;
+      if (!callId) return;
+      const controller = new AbortController();
+      speechPreparationsRef.current.add(controller);
+      try {
+        const response = await appFetch(`/api/voice-calls/${callId}/speech`, {
+          method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ taskId }), signal: controller.signal,
+        });
+        if (!response.ok) throw new Error('无法准备语音摘要');
+        const speech = await response.json() as { text?: string };
+        if (!speech.text?.trim() || speech.text.length > VOICE_SUMMARY_THRESHOLD) throw new Error('语音摘要无效');
+        if (activeRef.current && !controller.signal.aborted) speak(speech.text);
+      } catch {
+        if (activeRef.current && !controller.signal.aborted) speak(VOICE_SUMMARY_FALLBACK);
+      } finally { speechPreparationsRef.current.delete(controller); }
+    }
+
     const followTask = (submittedTask: Task) => new Promise<void>((resolve, reject) => {
       let stream: EventSource | null = null;
       let fallbackTimer: number | null = null;
@@ -232,14 +259,14 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
         if (task.status === 'done') {
           if (waitingTaskIdRef.current === task.id) waitingTaskIdRef.current = null;
           setTaskStatus('已完成：' + task.title);
-          speak(task.result || latestDotMessage || '任务已完成。');
+          void speakTaskResult(task.result || latestDotMessage || '任务已完成。', task.id);
           finish();
           return;
         }
         if (task.status === 'waiting') {
           waitingTaskIdRef.current = task.id;
           setTaskStatus('等待你的回复');
-          if (latestDotMessage) speak(latestDotMessage);
+          if (latestDotMessage) void speakTaskResult(latestDotMessage, task.id);
           finish();
           return;
         }
@@ -314,7 +341,7 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
     };
 
     const handleQwenEvent = (raw: string) => {
-      let event: { type?: string; event_id?: string; item_id?: string; text?: string; stash?: string; transcript?: string; error?: { message?: string } };
+      let event: { type?: string; event_id?: string; item_id?: string; text?: string; stash?: string; transcript?: string; response?: { modalities?: string[] }; error?: { message?: string } };
       try { event = JSON.parse(raw) as typeof event; } catch { return; }
       if (event.type === 'session.created') {
         qwenSessionCreated = true;
@@ -333,7 +360,7 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
             return;
           }
           qwenModelReady = true;
-          setStatus(qwenSpeechQueue.length > 0 ? '正在问候你…' : mutedRef.current ? '麦克风已静音' : '正在聆听');
+          setStatus(mutedRef.current ? '麦克风已静音' : '正在聆听');
           flushQwenSpeech();
         }).catch(() => setCallError('Qwen 实时语音麦克风音轨启动失败'));
         return;
@@ -351,11 +378,13 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
         return;
       }
       if (event.type === 'input_audio_buffer.speech_started') {
+        qwenPendingInputTurns += 1;
         setTranscript('');
         return;
       }
       if (event.type === 'response.created') { qwenResponseActive = true; return; }
       if (event.type === 'response.done') {
+        if (!event.response?.modalities?.includes('audio')) qwenPendingInputTurns = Math.max(0, qwenPendingInputTurns - 1);
         qwenResponseActive = false;
         if (qwenSpeechQueue.length === 0 && activeRef.current) setStatus(mutedRef.current ? '麦克风已静音' : '正在聆听');
         flushQwenSpeech();
@@ -679,10 +708,6 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
         const greeting = `你好，我是 ${dotName}，有什么我可以帮你？`;
         if (selectedProvider === 'qwen') {
           await startQwenRealtime(call);
-          if (activeRef.current) {
-            if (qwenModelReady) setStatus('正在问候你…');
-            speak(greeting);
-          }
         } else if (selectedProvider === 'volcengine') {
           await startVolcRealtime(call);
           if (activeRef.current) {

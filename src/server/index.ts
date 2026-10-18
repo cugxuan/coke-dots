@@ -21,6 +21,7 @@ import { DingTalkService } from './dingtalk.ts';
 import { DingTalkStreamService } from './dingtalk-stream.ts';
 import { DingTalkMonitorSupervisor } from './dingtalk-monitor.ts';
 import { negotiateQwenRealtime, VoiceProviderError, voiceProviderInfo } from './voice-provider.ts';
+import { prepareVoiceSpeech } from './voice-speech.ts';
 import { existsSync } from 'node:fs';
 import { createConnection } from 'node:net';
 import type { Duplex } from 'node:stream';
@@ -428,9 +429,25 @@ const server = createServer(async (req, res) => {
 
     const realtimeVoiceMatch = path.match(/^\/api\/voice-calls\/([a-f0-9-]+)\/realtime-session$/);
     const voiceTurnMatch = path.match(/^\/api\/voice-calls\/([a-f0-9-]+)\/turns$/);
+    const voiceSpeechMatch = path.match(/^\/api\/voice-calls\/([a-f0-9-]+)\/speech$/);
     const body = req.method === 'POST' || req.method === 'PATCH' || req.method === 'PUT'
       ? await readJson(req, realtimeVoiceMatch ? 100_000 : 32_000)
       : {};
+    if (voiceSpeechMatch && req.method === 'POST') {
+      const call = store.getVoiceCall(session.tenant.id, session.user.id, voiceSpeechMatch[1]);
+      if (!call || call.endedAt) return reply(res, 404, { error: '语音通话不存在或已结束' });
+      if (typeof body.taskId !== 'string' || !/^[a-f0-9-]{36}$/i.test(body.taskId)) return reply(res, 400, { error: '任务 ID 无效' });
+      const text = store.voiceCallTaskText(session.tenant.id, session.user.id, call.id, body.taskId);
+      if (!text) return reply(res, 404, { error: '本次通话尚无可播报的任务结果' });
+      const controller = new AbortController();
+      const cancel = () => controller.abort();
+      res.once('close', cancel);
+      try {
+        const speech = await prepareVoiceSpeech(text, effectiveModelConfig(session.tenant.id), fetch, controller.signal);
+        if (!res.destroyed) return reply(res, 200, speech);
+      } finally { res.off('close', cancel); }
+      return;
+    }
     if (path === '/api/voice-calls' && req.method === 'POST') {
       return reply(res, 201, store.createVoiceCall(session.tenant.id, session.user.id));
     }

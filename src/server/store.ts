@@ -496,6 +496,17 @@ export class Store {
     return rows.map(row => ({ id: row.id, tenantId: row.tenant_id, startedAt: row.started_at, endedAt: row.ended_at, durationSeconds: row.duration_seconds }));
   }
 
+  voiceCallTaskText(tenantId: string, userId: string, callId: string, taskId: string): string | null {
+    const turn = this.db.prepare('SELECT 1 FROM voice_call_turns WHERE tenant_id=? AND user_id=? AND call_id=? AND task_id=?')
+      .get(tenantId, userId, callId, taskId);
+    if (!turn) return null;
+    const task = this.getTask(taskId, tenantId);
+    if (!task || !['done', 'waiting'].includes(task.status)) return null;
+    const latest = this.db.prepare("SELECT body FROM entries WHERE tenant_id=? AND task_id=? AND kind='dot' ORDER BY id DESC LIMIT 1")
+      .get(tenantId, taskId) as { body: string } | undefined;
+    return (task.status === 'done' ? task.result || latest?.body : latest?.body)?.trim() || null;
+  }
+
   submitVoiceTurn(input: {
     tenantId: string; userId: string; callId: string; turnId: string; transcript: string;
     engine: Engine; waitingTaskId?: string;

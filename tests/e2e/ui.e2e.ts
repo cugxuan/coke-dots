@@ -11,7 +11,7 @@ import { desktopVoiceCall } from './scenarios/browser-voice.ts';
 import { mobileVoiceCall } from './scenarios/mobile-voice.ts';
 import { workspaceMemory, privateDotMemory } from './scenarios/memory.ts';
 import { workspaceRules, pageApprovals } from './scenarios/approvals.ts';
-import { qwenWebRtc } from './scenarios/qwen-voice.ts';
+import { qwenWebRtc, qwenLongVoiceResult, qwenLongVoiceSummary } from './scenarios/qwen-voice.ts';
 import { volcanoRealtime, seedDuplexEntitlement, mobileSeedDuplex, seedDuplexClarification } from './scenarios/volcengine-voice.ts';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -128,6 +128,12 @@ async function startMockModel() {
         assert.equal(request.url, '/v1/chat/completions');
         const payload = JSON.parse(raw) as { messages?: { role: string; content: string }[] };
         const prompt = payload.messages?.find(message => message.role === 'user')?.content || '';
+        if (payload.messages?.some(message => message.role === 'system' && message.content.startsWith('将 Dot 已经返回的结果'))) {
+          assert.equal(JSON.parse(prompt).result, qwenLongVoiceResult, 'The summary must receive the entire stored result');
+          response.writeHead(200, { 'content-type': 'application/json' });
+          response.end(JSON.stringify({ choices: [{ message: { content: qwenLongVoiceSummary }, finish_reason: 'stop' }] }));
+          return;
+        }
         if (payload.messages?.some(message => message.role === 'system' && message.content.startsWith('You classify a new message'))) {
           const data = JSON.parse(prompt) as { message: string; candidates: { id: string; title: string }[] };
           const byd = data.candidates.find(candidate => candidate.title.includes('E2E BYD 信用报告'));
@@ -220,6 +226,10 @@ async function startMockModel() {
           decision.message = isMobileVoiceReply
             ? '好的，我会把产品进展、风险和待决策事项整理成会前资料。'
             : '你希望会前资料重点覆盖哪些主题？';
+        }
+        if (prompt.includes('E2E voice long response — summarize actual task result')) {
+          decision.status = 'done';
+          decision.message = qwenLongVoiceResult;
         }
         const content = JSON.stringify(decision);
         if (response.destroyed || response.writableEnded) return;
