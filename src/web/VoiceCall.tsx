@@ -46,6 +46,8 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
   const [micLevelPercent, setMicLevelPercent] = useState(0);
   const [voiceProvider, setVoiceProvider] = useState<'browser' | 'qwen' | 'volcengine'>('browser');
   const [voiceModel, setVoiceModel] = useState('');
+  const liveCallTextRef = useRef<HTMLDivElement | null>(null);
+  const followLiveTextRef = useRef(true);
   const sessionRef = useRef<VoiceCallSession | null>(null);
   const recognitionRef = useRef<RecognitionLike | null>(null);
   const providerRef = useRef<'browser' | 'qwen' | 'volcengine'>('browser');
@@ -89,6 +91,11 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
     query.addEventListener('change', update);
     return () => query.removeEventListener('change', update);
   }, []);
+
+  useEffect(() => {
+    const liveText = liveCallTextRef.current;
+    if (liveText && followLiveTextRef.current) liveText.scrollTop = liveText.scrollHeight;
+  }, [transcript, taskStatus, displayMode, mobileMinimized]);
 
   function stopRealtimeTransport() {
     if (micStartupTimerRef.current !== null) {
@@ -160,7 +167,7 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
       if (!qwenModelReady || !channel || channel.readyState !== 'open') return false;
       channel.send(JSON.stringify({
         type: 'conversation.item.create',
-        item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: `Dots Agent 状态更新：${text}\n请用简短、自然的中文朗读这条状态，不要添加未经证实的信息。` }] },
+        item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: `播报内容：${text}\n请用简短、自然的中文朗读内容，不要读出标记、提及内部执行流程或添加未经证实的信息。` }] },
       }));
       channel.send(JSON.stringify({ type: 'response.create' }));
       qwenResponseActive = true;
@@ -828,7 +835,10 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
   const endButton = <button type="button" className="voice-call-card-end" aria-label="结束通话" title="结束通话" onClick={() => void endCall()}>
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4.5 13.8c4.6-4.1 10.4-4.1 15 0 .5.4.7 1.1.4 1.6l-1.3 3.2a1.4 1.4 0 0 1-1.6.8l-3.6-.9a1.4 1.4 0 0 1-1-1.4v-.9a12 12 0 0 0-4.2 0v.9a1.4 1.4 0 0 1-1 1.4l-3.6.9a1.4 1.4 0 0 1-1.6-.8l-1.3-3.2c-.3-.5-.1-1.2.4-1.6z" fill="currentColor"/></svg>
   </button>;
-  const liveCallText = (transcript || taskStatus) && <div className="voice-call-card-live" data-testid="voice-call-live-text">
+  const liveCallText = (transcript || taskStatus) && <div ref={liveCallTextRef} className="voice-call-card-live" data-testid="voice-call-live-text" role="region" aria-label="通话文字" tabIndex={0} onScroll={event => {
+    const liveText = event.currentTarget;
+    followLiveTextRef.current = liveText.scrollHeight - liveText.clientHeight - liveText.scrollTop < 24;
+  }}>
     {transcript && <span className="voice-call-card-transcript">你：{transcript}</span>}
     {taskStatus && <span className="voice-call-card-task" data-task-status={taskStatus}>{taskStatus}</span>}
   </div>;
