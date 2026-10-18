@@ -4,6 +4,7 @@ import { appFetch, request } from './api.ts';
 import { statusText, engineText } from './ui-types.ts';
 import { TaskControls } from './TaskControls.tsx';
 import { MessageBody } from './MessageBody.tsx';
+import { MessageTimestamp } from './MessageTimestamp.tsx';
 
 export function ActivityView({ tenantId, profileName, state, stateLoaded, onSelectTask, onOpenPage }: { tenantId: string; profileName: string; state: Snapshot; stateLoaded: boolean; onSelectTask: (taskId: string) => void; onOpenPage: (pageId: string, taskId?: string | null) => void }) {
   const tenantIdRef = useRef(tenantId);
@@ -75,7 +76,7 @@ export function ActivityView({ tenantId, profileName, state, stateLoaded, onSele
         : task.status === 'delegating' ? `${terminalChildren}/${children.length} 项子任务已结束。${task.result ? ` ${task.result}` : ''}`
           : task.error || task.result || task.instruction;
       return <div className={`task-card ${task.parentTaskId ? 'delegated-child' : ''}`} data-testid={`task-card-${task.id}`} key={task.id}>
-      <div className="task-card-head"><span className={`pill ${task.status}`}>{statusText[task.status]}</span><time>{new Date(task.updatedAt).toLocaleString('zh-CN')}</time></div>
+      <div className="task-card-head"><span className={`pill ${task.status}`}>{statusText[task.status]}</span><MessageTimestamp value={task.updatedAt} /></div>
       {parent && <small className="delegated-from">委派自：{parent.title} · 内核：{engineText[task.engine]}</small>}
       <h2>{task.title}</h2><p>{description}</p>
       <div className="card-actions"><button onClick={() => onSelectTask(task.id)}>查看详情 →</button><TaskControls task={task} act={async (item, action, extra) => { try { await request(`/tasks/${item.id}`, 'PATCH', { action, ...extra }); } catch (reason) { setError(String(reason)); } }} compact /></div>
@@ -86,7 +87,7 @@ export function ActivityView({ tenantId, profileName, state, stateLoaded, onSele
       {loading ? <p className="activity-empty" role="status">正在加载活动记录…</p> : !entries.length ? <p className="activity-empty">还没有活动记录。</p> : <ol className="activity-list">{entries.map(entry => {
         const task = entry.taskId ? tasks.get(entry.taskId) : undefined;
         return <li className={`activity-entry ${entry.kind}`} data-testid="activity-entry" key={entry.id}>
-          <div className="activity-entry-head"><strong>{entry.kind === 'user' ? '你' : entry.kind === 'dot' ? profileName : '系统'}</strong><time>{new Date(entry.createdAt).toLocaleString('zh-CN')}</time></div>
+          <div className="activity-entry-head"><strong>{entry.kind === 'user' ? '你' : entry.kind === 'dot' ? profileName : '系统'}</strong><MessageTimestamp value={entry.createdAt} /></div>
           <MessageBody body={entry.body} onOpenPage={pageId => onOpenPage(pageId, entry.taskId)} />
           {task && <button className="activity-open-task" onClick={() => onSelectTask(task.id)}>打开任务：{task.title} →</button>}
         </li>;

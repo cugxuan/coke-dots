@@ -29,6 +29,7 @@ import './mobile-replica.css';
 import './computer-split.css';
 import './chat-routing.css';
 import { MessageBody } from './MessageBody.tsx';
+import { MessageTimestamp } from './MessageTimestamp.tsx';
 import { LoginScreen } from './LoginScreen.tsx';
 import { ActivityView } from './ActivityView.tsx';
 import { WorkspaceSwitcher } from './WorkspaceSwitcher.tsx';
@@ -491,8 +492,19 @@ function App() {
         {!stateLoaded ? <div className="workspace-loading" role="status">正在恢复工作区…</div> : view === 'home' ? <div className="welcome chat-home" data-testid="chat-home"><h1>What's on your mind today?</h1></div> : !voiceCallsLoaded ? <div className="workspace-loading" role="status">正在恢复工作区…</div> : !selectedTask && !hasConversationHistory ? <DotOnboarding profile={state.profile} computerAccess={state.computerAccess} onComputerAccess={saveComputerAccess} onEditSetup={openDotCustomizer} /> : <div className="timeline" ref={timelineRef} onScroll={() => { const timeline = timelineRef.current; if (timeline) timelineAtBottomRef.current = timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight <= 48; }}>
           {!selectedTask && <div className="timeline-title">最近的对话和进度</div>}
           {timelineItems.map(item => item.source === 'entry'
-            ? <Fragment key={item.id}><article data-testid="chat-timeline-item" data-timestamp={item.at} className={`message ${item.entry.kind}`}><div className="message-avatar">{item.entry.kind === 'user' ? '你' : item.entry.kind === 'dot' ? <DotAvatar appearance={state.profile} small /> : '·'}</div><div><div className="message-name">{item.entry.kind === 'user' ? '你' : item.entry.kind === 'dot' ? state.profile.name : '系统'} <time>{new Date(item.entry.createdAt).toLocaleString('zh-CN')}</time></div><MessageBody body={item.entry.body} onOpenPage={id => openPage(id, item.entry.taskId)} />{Boolean(item.entry.attachments?.length) && <ul className="message-attachments" data-testid="message-attachments" aria-label="附加文件">{item.entry.attachments!.map(attachment => <li key={attachment.id}><span aria-hidden="true">▤</span><span>{attachment.name}</span></li>)}</ul>}</div></article>{item.entry.taskId && progressEntry.get(item.entry.taskId) === item.entry.id && taskById.has(item.entry.taskId) && <TaskProgress task={taskById.get(item.entry.taskId)!} onOpen={selected ? undefined : () => { setSelected(item.entry.taskId); }} onBack={selected ? () => setSelected(null) : undefined} />}</Fragment>
-            : <article key={item.id} data-testid="chat-timeline-item" data-timestamp={item.at} className="message voice-call-ended" data-call-id={item.call.id}><div className="voice-call-ended-chip"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M7.1 3.8 10 7.2 8.2 9.1a13 13 0 0 0 6.7 6.7l1.9-1.8 3.4 2.9-.8 3.2a1.8 1.8 0 0 1-2 1.4C9 20.2 3.8 15 2.5 6.6a1.8 1.8 0 0 1 1.4-2z" fill="currentColor" /></svg>Me: Call ended</div><small>Optional</small></article>)}
+            ? <Fragment key={item.id}>
+              <article data-testid="chat-timeline-item" data-timestamp={item.at} className={`message ${item.entry.kind}`}>
+                <div className="message-avatar">{item.entry.kind === 'user' ? '你' : item.entry.kind === 'dot' ? <DotAvatar appearance={state.profile} small /> : '·'}</div>
+                <div>
+                  <div className="message-name">{item.entry.kind === 'user' ? '你' : item.entry.kind === 'dot' ? state.profile.name : '系统'}</div>
+                  <MessageBody body={item.entry.body} onOpenPage={id => openPage(id, item.entry.taskId)} />
+                  {Boolean(item.entry.attachments?.length) && <ul className="message-attachments" data-testid="message-attachments" aria-label="附加文件">{item.entry.attachments!.map(attachment => <li key={attachment.id}><span aria-hidden="true">▤</span><span>{attachment.name}</span></li>)}</ul>}
+                  <MessageTimestamp value={item.entry.createdAt} />
+                </div>
+              </article>
+              {item.entry.taskId && progressEntry.get(item.entry.taskId) === item.entry.id && taskById.has(item.entry.taskId) && <TaskProgress task={taskById.get(item.entry.taskId)!} onOpen={selected ? undefined : () => { setSelected(item.entry.taskId); }} onBack={selected ? () => setSelected(null) : undefined} />}
+            </Fragment>
+            : <article key={item.id} data-testid="chat-timeline-item" data-timestamp={item.at} className="message voice-call-ended" data-call-id={item.call.id}><div className="voice-call-ended-chip"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M7.1 3.8 10 7.2 8.2 9.1a13 13 0 0 0 6.7 6.7l1.9-1.8 3.4 2.9-.8 3.2a1.8 1.8 0 0 1-2 1.4C9 20.2 3.8 15 2.5 6.6a1.8 1.8 0 0 1 1.4-2z" fill="currentColor" /></svg>Me: Call ended</div><small>Optional</small><MessageTimestamp value={item.at} /></article>)}
           {selectedTask?.status === 'done' && (selectedTask.engine === 'pi' || selectedTask.engine === 'dsh') && <TaskArtifacts key={selectedTask.id} taskId={selectedTask.id} onOpenComputer={openComputer} />}
           {selectedTask && <TaskControls task={selectedTask} act={act} />}
         </div>}
