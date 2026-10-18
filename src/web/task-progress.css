@@ -14,12 +14,22 @@
 .task-progress li>div>span{font-size:11px;white-space:nowrap;color:#747484}
 .task-progress li[data-state=failed]{border-left-color:#c04b4b}
 .task-progress pre{font:12px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;max-height:240px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;background:#eeeef2;border-radius:7px;padding:10px;margin:0}
-.task-progress footer{display:flex;flex-wrap:wrap;gap:4px 12px;border-top:1px solid #e6e6eb;padding-top:10px;margin-top:10px;font-size:11px;color:#72727d}
+.task-progress footer{display:flex;flex-wrap:wrap;align-items:center;gap:4px 12px;border-top:1px solid #e6e6eb;padding-top:10px;margin-top:10px;font-size:11px;color:#72727d}
+.task-progress-footer-status{display:inline-flex;align-items:center;gap:5px;flex-shrink:0;padding:3px 7px;border-radius:6px;background:#e9eaf0;color:#555c73;font-weight:600;white-space:nowrap}
+.task-progress-footer-status[data-state=working],.task-progress-footer-status[data-state=delegating]{background:#e8effb;color:#355d9f}
+.task-progress-footer-status[data-state=done]{background:#e5f2e9;color:#267044}
+.task-progress-footer-status[data-state=waiting]{background:#fff1d6;color:#865b13}
+.task-progress-footer-status[data-state=failed]{background:#fbe8e9;color:#a73842}
 .task-progress-error{color:#b33f46;white-space:pre-wrap;overflow-wrap:anywhere}
 .dots-dark .task-progress{background:#202024;border-color:#393940;color:#c3c3cd}
 .dots-dark .task-progress header strong{color:#ededf4}
 .dots-dark .task-progress pre{background:#17171b}
 .dots-dark .task-progress footer{border-color:#36363d;color:#a1a1ae}
+.dots-dark .task-progress-footer-status{background:#383a45;color:#ccd0df}
+.dots-dark .task-progress-footer-status[data-state=working],.dots-dark .task-progress-footer-status[data-state=delegating]{background:#29374e;color:#a6c4ff}
+.dots-dark .task-progress-footer-status[data-state=done]{background:#263e30;color:#9edbb2}
+.dots-dark .task-progress-footer-status[data-state=waiting]{background:#443820;color:#f0ce8b}
+.dots-dark .task-progress-footer-status[data-state=failed]{background:#482b31;color:#ffa9b0}
 @keyframes task-progress-pulse{50%{opacity:.35}}
 @media(prefers-reduced-motion:reduce){.task-progress-pulse{animation:none}}
 @media(max-width:620px){.task-progress{padding:11px}.task-progress header{gap:6px}.task-progress header strong{font-size:12px}}

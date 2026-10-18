@@ -5,6 +5,7 @@ import './task-progress.css';
 
 const number = (value: number) => value.toLocaleString('zh-CN');
 const usageTitle = (usage: TokenUsage) => `输入 ${number(usage.input)}（含缓存读取 ${number(usage.cacheRead)}、写入 ${number(usage.cacheWrite)}） · 输出 ${number(usage.output)}`;
+const footerStatusText = { ...statusText, working: '处理中', waiting: '等待补充', failed: '执行失败' };
 
 export function TaskProgress({ task, onOpen, onBack }: { task: Task; onOpen?: () => void; onBack?: () => void }) {
   const [, setClock] = useState(0);
@@ -36,7 +37,12 @@ export function TaskProgress({ task, onOpen, onBack }: { task: Task; onOpen?: ()
       {!!timing.pageWaitMs && <>（导航与显式等待 {seconds(timing.pageWaitMs)}）</>}
       {!!timing.compactions && <><br />上下文整理 {timing.compactions} 次 · {seconds(timing.compactionMs)}</>}
     </p></details>}
-    <footer data-testid="task-token-usage">{execution?.usage ? <>
+    <footer data-testid="task-token-usage">
+      <span className="task-progress-footer-status" data-state={task.status} role="status" aria-label="任务状态" aria-atomic="true">
+        <span className={task.status === 'working' || task.status === 'delegating' ? 'task-progress-pulse' : undefined} aria-hidden="true">●</span>
+        {footerStatusText[task.status]}
+      </span>
+      {execution?.usage ? <>
       <span title={usageTitle(execution.usage)}>本轮 {number(execution.usage.total)} tokens</span>
       <span>输入 {number(execution.usage.input)} · 输出 {number(execution.usage.output)}</span>
       {(execution.usage.cacheRead > 0 || execution.usage.cacheWrite > 0) && <span>缓存读取 {number(execution.usage.cacheRead)} · 写入 {number(execution.usage.cacheWrite)}（计入输入）</span>}
