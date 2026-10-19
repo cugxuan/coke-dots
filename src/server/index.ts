@@ -1,5 +1,6 @@
 import { ChatMessages, ChatSubmissionError, parseChatSubmission } from './chat-messages.ts';
 import { normalizeBasePath, readJson, readBytes, textAttachmentType, reply, rejectUpgrade, writeTaskArtifact, serveStatic } from './http-utils.ts';
+import { orderTaskArtifacts } from '../shared/task-artifacts.ts';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { resolve, join, extname } from 'node:path';
 import { Store } from './store.ts';
@@ -670,7 +671,7 @@ const server = createServer(async (req, res) => {
       const task = store.getTask(taskArtifactsMatch[1], session.tenant.id);
       if (!task) return reply(res, 404, { error: '任务不存在' });
       const artifacts = await computer.listTaskArtifacts?.(task.id) || [];
-      return reply(res, 200, { artifacts });
+      return reply(res, 200, { artifacts: orderTaskArtifacts(artifacts, task.result) });
     }
     const taskArtifactPreviewUrlMatch = path.match(/^\/api\/tasks\/([a-f0-9-]{36})\/artifacts\/preview-url$/i);
     if (taskArtifactPreviewUrlMatch && req.method === 'GET') {

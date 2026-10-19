@@ -61,7 +61,8 @@ test('Token Plan Audio 3.0 uses its own voice and built-in transcription over se
   assert.equal(audio.turn_detection.type, 'server_vad');
   assert.equal(audio.turn_detection.silence_duration_ms, 2500);
   assert.deepEqual(audio.modalities, ['text', 'audio']);
-  assert.equal(audio.tools.length, 2);
+  assert.equal(audio.tools.length, 3);
+  assert.deepEqual(audio.tools.map(tool => tool.function.name), ['delegate_task', 'get_task_status', 'get_task_files']);
   const omni = qwenSessionConfig(QWEN_REALTIME_MODEL, 'Dot');
   assert('audio' in omni);
   assert.equal(omni.audio.output.voice, 'Tina');

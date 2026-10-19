@@ -1,12 +1,8 @@
 import { useEffect, useId, useState } from 'react';
 import type { TaskArtifact } from '../shared/types.ts';
+import { taskArtifactDownloadPath } from '../shared/task-artifacts.ts';
 import { appFetch, appPath } from './api.ts';
 import './task-artifacts.css';
-
-function contentUrl(taskId: string, path: string) {
-  const safePath = path.split('/').map(part => encodeURIComponent(part)).join('/');
-  return appPath(`/api/tasks/${encodeURIComponent(taskId)}/artifacts/file/${safePath}`);
-}
 
 export function TaskArtifacts({ taskId, refreshKey, autoPreview = true, onOpenComputer }: { taskId: string; refreshKey?: string; autoPreview?: boolean; onOpenComputer: () => void }) {
   const [artifacts, setArtifacts] = useState<TaskArtifact[] | null>(null);
@@ -93,7 +89,7 @@ export function TaskArtifacts({ taskId, refreshKey, autoPreview = true, onOpenCo
     {error && <p className="task-artifact-error" role="status">{error}</p>}
     {artifacts.length > 0 && <div className="task-artifact-list" id={listId}>
       {(expanded ? artifacts : artifacts.slice(0, 5)).map(artifact => {
-        const url = contentUrl(taskId, artifact.path);
+        const url = appPath(taskArtifactDownloadPath(taskId, artifact.path));
         const isPreviewed = previewPath === artifact.path;
         return <article key={artifact.path} className="task-artifact" data-testid="task-artifact" data-artifact-path={artifact.path}>
           <span className="task-artifact-file-icon" aria-hidden="true">{artifact.mediaType.startsWith('image/') ? '▧' : artifact.mediaType === 'text/html' ? '◉' : '▤'}</span>

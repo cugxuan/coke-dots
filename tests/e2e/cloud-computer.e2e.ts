@@ -175,7 +175,7 @@ async function startRemote() {
             { path: 'tetris.html', name: 'tetris.html', mediaType: 'text/html', size: Buffer.byteLength(html), previewable: true },
           ]);
           taskArtifactBodies.set(String(body.taskId), new Map([['tetris.html', html], ['game.js', script]]));
-          if (streamProgress) { res.end(JSON.stringify({ type: 'result', result: { status: 'done', message: '俄罗斯方块已创建，可以在下方预览或在云电脑中打开。', sessionId: 'cloud-session-1' } }) + '\n'); return; }
+          if (streamProgress) { res.end(JSON.stringify({ type: 'result', result: { status: 'done', message: '俄罗斯方块已创建：tetris.html，可以在下方预览或在云电脑中打开。', sessionId: 'cloud-session-1' } }) + '\n'); return; }
           return content(res, 200, 'application/json', JSON.stringify({ status: 'done', message: body.engine === 'pi' ? '俄罗斯方块已创建，可以在下方预览或在云电脑中打开。' : `Cloud task completed in ${body.engine}`, sessionId: 'cloud-session-1' }));
         }
       }
@@ -437,6 +437,8 @@ try {
   assert.equal(await progress.getByRole('button', { name: '任务详情 →' }).count(), 1, 'Completing a task must leave the Dot conversation open');
   const mainFiles = page.locator(`[data-testid="task-artifacts"][data-task-id="${created.task.id}"]`);
   const mainHtml = mainFiles.locator('[data-artifact-path="tetris.html"]');
+  await mainHtml.waitFor({ state: 'visible' });
+  assert.equal(await mainFiles.getByTestId('task-artifact').first().getAttribute('data-artifact-path'), 'tetris.html', 'The named result must precede supporting scripts');
   await mainHtml.waitFor();
   assert.equal(await mainFiles.getByTestId('task-artifact-preview').count(), 0, 'The main conversation exposes downloads without automatically loading HTML');
   const fileDownloadPromise = page.waitForEvent('download');
@@ -469,8 +471,8 @@ try {
   }, created.task.id);
   assert.equal(alphaArtifactChecks.listStatus, 200);
   assert.deepEqual(alphaArtifactChecks.artifacts, [
-    { path: 'game.js', name: 'game.js', mediaType: 'text/javascript', size: Buffer.byteLength("document.querySelector('#demo-artifact').textContent = '俄罗斯方块预览';"), previewable: true },
     { path: 'tetris.html', name: 'tetris.html', mediaType: 'text/html', size: Buffer.byteLength('<!doctype html><html><body><main id="demo-artifact">正在加载游戏…</main><script src="game.js"></script></body></html>'), previewable: true },
+    { path: 'game.js', name: 'game.js', mediaType: 'text/javascript', size: Buffer.byteLength("document.querySelector('#demo-artifact').textContent = '俄罗斯方块预览';"), previewable: true },
   ]);
   assert.equal(alphaArtifactChecks.contentStatus, 200);
   assert.equal(alphaArtifactChecks.contentType, 'text/html; charset=utf-8');

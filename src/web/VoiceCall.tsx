@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import type { DotAppearance, Snapshot, Task, VoiceCallSession } from '../shared/types.ts';
+import type { DotAppearance, Snapshot, Task, TaskArtifact, VoiceCallSession } from '../shared/types.ts';
+import { taskArtifactDownloadPath } from '../shared/task-artifacts.ts';
 import { SpeechTurnCollector } from '../shared/speech-turn.ts';
 import { decodeVolcengineFloat32Pcm } from '../shared/volcengine-audio.ts';
 import { QWEN_REALTIME_MODEL, qwenSessionConfig } from '../shared/qwen-realtime.ts';
 import { VOICE_SUMMARY_FALLBACK, VOICE_SUMMARY_THRESHOLD } from '../shared/voice-speech.ts';
-import { appFetch, appWebSocketUrl } from './api.ts';
+import { appFetch, appPath, appWebSocketUrl } from './api.ts';
 import { DotAvatar } from './DotAvatar.tsx';
 import { useCallCardPosition } from './useCallCardPosition.ts';
 import { QwenVoiceSession } from './qwen-voice-session.ts';
@@ -29,12 +30,13 @@ type RecognitionConstructor = new () => RecognitionLike;
 type SpeechWindow = Window & { SpeechRecognition?: RecognitionConstructor; webkitSpeechRecognition?: RecognitionConstructor };
 const MOBILE_CALL_LAYOUT_QUERY = '(max-width: 520px), (max-width: 1024px) and (pointer: coarse)';
 
-export function VoiceCall({ dotName, appearance, snapshot, initialAudioContext, onTranscript, onClose }: {
+export function VoiceCall({ dotName, appearance, snapshot, initialAudioContext, onTranscript, onShowTaskFiles, onClose }: {
   dotName: string;
   appearance: DotAppearance;
   snapshot: Snapshot;
   initialAudioContext: AudioContext | null;
   onTranscript: (text: string, waitingTaskId: string | undefined, callId: string, turnId: string, sourceMessageId?: string) => Promise<Task>;
+  onShowTaskFiles: (taskId: string) => void;
   onClose: () => void;
 }) {
   const [displayMode, setDisplayMode] = useState<'desktop' | 'mobile'>(() => window.matchMedia(MOBILE_CALL_LAYOUT_QUERY).matches ? 'mobile' : 'desktop');
@@ -84,6 +86,8 @@ export function VoiceCall({ dotName, appearance, snapshot, initialAudioContext, 
   const startedAtRef = useRef(Date.now());
   const startupFailedRef = useRef(false);
   const onTranscriptRef = useRef(onTranscript);
+  const onShowTaskFilesRef = useRef(onShowTaskFiles);
+  onShowTaskFilesRef.current = onShowTaskFiles;
   const waitingTaskIdRef = useRef<string | null>(null);
   const taskFollowStopsRef = useRef(new Set<() => void>());
   const snapshotRef = useRef(snapshot);
@@ -371,12 +375,28 @@ export function VoiceCall({ dotName, appearance, snapshot, initialAudioContext, 
           }
           return { task_id: task.id, status: task.status, message: '任务已收到。只有状态为 done 才代表完成，queued 代表正在排队。' };
         }
-        if (name === 'get_task_status') {
+        if (name === 'get_task_status' || name === 'get_task_files') {
           const taskId = args.task_id || latestQwenTaskId;
           if (!taskId) return { message: '本次通话尚未派发任务。' };
           const response = await appFetch(`/api/voice-calls/${callId}/tasks/${taskId}`);
           const result = await response.json() as { task?: Task; message?: string; error?: string };
           if (!response.ok || !result.task) throw new Error(result.error || '无法查询任务');
+          if (name === 'get_task_files') {
+            const filesResponse = await appFetch(`/api/tasks/${result.task.id}/artifacts`);
+            const filesResult = await filesResponse.json() as { artifacts?: TaskArtifact[]; error?: string };
+            if (!filesResponse.ok || !filesResult.artifacts) throw new Error(filesResult.error || '文件暂时无法读取，请稍后重试');
+            const files = filesResult.artifacts;
+            const running = ['queued', 'working', 'delegating'].includes(result.task.status);
+            if (files.length && isCurrentTurn(input.turn)) onShowTaskFilesRef.current(result.task.id);
+            return {
+              task_id: result.task.id, status: result.task.status, result: result.message?.slice(0, 12000),
+              files: files.slice(0, 20).map(file => ({ name: file.name, path: file.path, size: file.size, download_url: appPath(taskArtifactDownloadPath(result.task!.id, file.path)) })),
+              total: files.length,
+              message: !files.length ? '暂未找到可下载的文件；不要编造链接或重新执行原任务。' : running
+                ? '任务仍在进行，已有文件可能尚未完成；任务结束后可在文件列表点击“下载到本机”。'
+                : '已打开任务的文件列表；请用户点击所需文件旁的“下载到本机”。结果中提及的文件会优先显示，其他文件可展开查看。尚未保存到用户电脑。',
+            };
+          }
           if (isCurrentTurn(input.turn) && ['queued', 'working', 'delegating'].includes(result.task.status)) void followTask(result.task, input.turn);
           return { task_id: result.task.id, status: result.task.status, title: result.task.title, result: result.message?.slice(0, 12000), error: result.task.error };
         }

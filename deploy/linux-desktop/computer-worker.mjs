@@ -154,6 +154,7 @@ const workspace = path.resolve(process.env.DOTS_AGENT_WORKSPACE || '/workspace')
 const artifactTaskId = /^[a-f0-9-]{36}$/i;
 const maxArtifactBytes = 25 * 1024 * 1024;
 const maxArtifactCount = 100;
+const artifactExcludedDirectories = new Set(['node_modules', '__pycache__']);
 const artifactTypes = new Map(Object.entries({
   '.html': 'text/html; charset=utf-8', '.htm': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.json': 'application/json; charset=utf-8',
@@ -190,7 +191,10 @@ async function listArtifacts(taskId) {
     for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
       if (entry.name.startsWith('.')) continue;
       const absolute = path.join(directory, entry.name);
-      if (entry.isDirectory()) { pending.push(absolute); continue; }
+      if (entry.isDirectory()) {
+        if (!artifactExcludedDirectories.has(entry.name)) pending.push(absolute);
+        continue;
+      }
       if (!entry.isFile()) continue;
       const real = await fs.realpath(absolute);
       if (!real.startsWith(`${root}${path.sep}`)) continue;

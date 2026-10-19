@@ -32,6 +32,14 @@ test('cloud computer exposes task files safely through its authenticated worker'
   await writeFile(join(taskDirectory, 'tetris.html'), html);
   await mkdir(join(taskDirectory, 'assets'));
   await writeFile(join(taskDirectory, 'assets', 'game.css'), css);
+  // Dependency trees used while creating a report must not exhaust the file
+  // listing limit before the user's actual nested outputs are visited.
+  await mkdir(join(taskDirectory, 'node_modules', 'pdfjs-dist'), { recursive: true });
+  for (let index = 0; index < 120; index += 1) {
+    await writeFile(join(taskDirectory, 'node_modules', 'pdfjs-dist', `dependency-${index}.js`), 'export {};');
+  }
+  await mkdir(join(taskDirectory, '__pycache__'));
+  await writeFile(join(taskDirectory, '__pycache__', 'extract.pyc'), 'cache');
   await writeFile(outside, '<p>private</p>');
   await mkdir(outsideTask);
   await writeFile(join(outsideTask, 'secret.html'), '<p>private task</p>');

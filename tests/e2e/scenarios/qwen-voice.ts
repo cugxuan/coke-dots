@@ -306,13 +306,43 @@ async function qwenSecretaryTools(ctx: UiScenarioContext, callId: string, taskId
   }, { id, name, args, text });
   const output = async (id: string) => {
     await page.waitForFunction(id => (window as unknown as { __dotsQwenSentEvents: { item?: { call_id?: string } }[] }).__dotsQwenSentEvents.some(e => e.item?.call_id === 'call-' + id), id);
-    return await page.evaluate(id => JSON.parse((window as unknown as { __dotsQwenSentEvents: { item?: { call_id?: string; output?: string } }[] }).__dotsQwenSentEvents.find(e => e.item?.call_id === 'call-' + id)!.item!.output!), id) as { task_id?: string; status?: string; result?: string };
+    return await page.evaluate(id => JSON.parse((window as unknown as { __dotsQwenSentEvents: { item?: { call_id?: string; output?: string } }[] }).__dotsQwenSentEvents.find(e => e.item?.call_id === 'call-' + id)!.item!.output!), id) as { task_id?: string; status?: string; result?: string; message?: string; total?: number; files?: { path: string; download_url: string }[]; error?: string };
   };
   const count = () => page.evaluate(async () => (await fetch('/api/state').then(r => r.json())).tasks.length as number);
   const beforeStatus = await count();
   await tool('status-query', 'get_task_status', { task_id: taskId }, '刚才的任务做完了吗？');
   assert.equal((await output('status-query')).status, 'done');
   assert.equal(await count(), beforeStatus, 'A progress question must read the existing task, not create another');
+  await tool('empty-files', 'get_task_files', {}, '我想下载这个文件。');
+  const emptyFiles = await output('empty-files');
+  assert.equal(emptyFiles.total, 0);
+  assert.deepEqual(emptyFiles.files, []);
+  assert.match(emptyFiles.message!, /暂未找到/);
+  const fileRoute = `**/api/tasks/${taskId}/artifacts`;
+  await page.route(fileRoute, route => route.fulfill({ json: { artifacts: [{ path: '导出/汇总 #1.csv', name: '汇总 #1.csv', size: 12, mediaType: 'text/csv', previewable: false }] } }));
+  try {
+    await tool('download-files', 'get_task_files', { task_id: taskId }, '应该看哪个汇总文件？');
+    const files = await output('download-files');
+    assert.equal(files.task_id, taskId);
+    assert.equal(files.total, 1);
+    assert.equal(files.files?.[0].download_url, `/api/tasks/${taskId}/artifacts/file/%E5%AF%BC%E5%87%BA/%E6%B1%87%E6%80%BB%20%231.csv`);
+    await page.waitForURL(`**/chat/${taskId}`);
+    assert.equal(await page.getByTestId('voice-call').count(), 1, 'Opening task files keeps the compact call connected');
+    assert.equal(await count(), beforeStatus, 'File retrieval must not rerun the original task');
+    await page.route(fileRoute, route => route.fulfill({ status: 503, json: { error: '文件服务暂不可用' } }));
+    await tool('failed-files', 'get_task_files', { task_id: taskId }, '再给我文件。');
+    assert.match((await output('failed-files')).error!, /文件服务暂不可用/);
+  } finally { await page.unroute(fileRoute); }
+  const otherTask = await page.evaluate(async callId => {
+    const state = await fetch('/api/state').then(r => r.json());
+    for (const task of state.tasks) {
+      if ((await fetch(`/api/voice-calls/${callId}/tasks/${task.id}`)).status === 404) return task.id as string;
+    }
+    throw new Error('Expected an existing task outside this voice call');
+  }, callId);
+  await tool('foreign-call-files', 'get_task_files', { task_id: otherTask }, '下载另一个通话的文件。');
+  assert.match((await output('foreign-call-files')).error!, /本次通话没有该任务/);
+  assert.equal(await count(), beforeStatus);
   await tool('clarification-task', 'delegate_task', { instruction: '请用云电脑打开网页并告诉我标题。' }, '请用云电脑打开网页并告诉我标题。');
   const waitingId = (await output('clarification-task')).task_id!;
   await page.waitForFunction(async id => (await fetch('/api/state').then(r => r.json())).tasks.find((t: { id: string }) => t.id === id)?.status === 'waiting', waitingId);
