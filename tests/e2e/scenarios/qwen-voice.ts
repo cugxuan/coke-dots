@@ -43,6 +43,12 @@ export async function qwenWebRtc(ctx: UiScenarioContext, model = 'qwen3.8-omni-f
       view.__dotsQwenAudioResponses = [];
       view.__dotsQwenHoldAudioCreated = false;
       view.__dotsQwenHoldAudioDone = false;
+      view.__dotsQwenExtraStreams = 0;
+      // Chat's existing stream is already connected. Speech must consume those
+      // same updates even if opening another progress connection would fail.
+      const NativeEventSource = window.EventSource;
+      view.__dotsRestoreEventSource = () => { window.EventSource = NativeEventSource; };
+      window.EventSource = class { constructor() { view.__dotsQwenExtraStreams++; throw new Error('Redundant voice progress stream'); } };
       class FakeAudio {
         constructor() { this.muted = false; view.__dotsQwenAudio = this; }
         setAttribute() {}
@@ -104,7 +110,11 @@ export async function qwenWebRtc(ctx: UiScenarioContext, model = 'qwen3.8-omni-f
   await ctx.alphaPage!.waitForFunction(() => (window as unknown as { __dotsQwenSentEvents?: { type: string }[] }).__dotsQwenSentEvents?.some(event => event.type === 'session.update') === true, null, { timeout: 10_000 });
   assert.match(await call.locator('[data-testid="voice-call-transcript"]').innerText(), /正在初始化语音模型/, 'The UI must not report listening before model setup is acknowledged');
   assert.equal(await ctx.alphaPage!.evaluate(() => (window as unknown as { __dotsQwenFakeSender: { track: unknown } }).__dotsQwenFakeSender.track), null, 'The microphone must remain detached until session.updated');
-  await ctx.alphaPage!.evaluate(() => (window as unknown as { __dotsQwenConfirmSession: () => void }).__dotsQwenConfirmSession());
+  assert.equal(await ctx.alphaPage!.evaluate(() => (window as unknown as QwenInterruptionWindow).__dotsQwenAudioResponses.length), 0, 'No greeting can start before the model is ready');
+  await ctx.alphaPage!.evaluate(() => {
+    const confirm = (window as unknown as { __dotsQwenConfirmSession: () => void }).__dotsQwenConfirmSession;
+    confirm(); confirm();
+  });
   await ctx.alphaPage!.waitForFunction(() => document.querySelector('[data-testid="voice-call-transcript"]')?.textContent?.includes('正在聆听') === true, null, { timeout: 10_000 });
   const microphoneAttachedAfterSetup = await ctx.alphaPage!.evaluate(() => {
     const view = window as unknown as { __dotsQwenFakeSender: { track: unknown }; __dotsQwenFakeTrack: unknown };
@@ -120,7 +130,9 @@ export async function qwenWebRtc(ctx: UiScenarioContext, model = 'qwen3.8-omni-f
   });
   const sessionUpdate = await ctx.alphaPage!.evaluate(() => (window as unknown as { __dotsQwenSentEvents: { type: string; session?: { modalities?: string[]; voice?: string; audio?: unknown; input_audio_transcription?: { model?: string }; turn_detection?: { type?: string } } }[] }).__dotsQwenSentEvents.find(event => event.type === 'session.update'));
   assert.deepEqual(sessionUpdate?.session?.modalities, ['text'], 'Automatic VAD responses cannot contain audio');
-  assert.equal(await ctx.alphaPage!.evaluate(() => (window as unknown as { __dotsQwenSentEvents: { type: string }[] }).__dotsQwenSentEvents.some(event => event.type === 'response.create')), false, 'No greeting or answer is generated before a Dot result');
+  const greetingTexts = await ctx.alphaPage!.evaluate(() => (window as unknown as QwenInterruptionWindow).__dotsQwenSentEvents.flatMap(event => event.item?.content?.map(part => part.text || '') || []));
+  assert.equal(greetingTexts.length, 1, 'Repeated setup acknowledgements must produce exactly one greeting');
+  assert(greetingTexts[0].includes('有什么我可以帮你？'), 'The connected call must greet the user explicitly');
   if (model === 'qwen-audio-3.0-realtime-plus') {
     assert.equal(sessionUpdate?.session?.voice, 'longanqian');
     assert.equal(sessionUpdate?.session?.audio, undefined);
@@ -145,7 +157,7 @@ export async function qwenWebRtc(ctx: UiScenarioContext, model = 'qwen3.8-omni-f
   await ctx.alphaPage!.waitForFunction(() => document.querySelector('[data-testid="voice-call-transcript"]')?.getAttribute('data-task-status')?.includes('已完成') === true, null, { timeout: 20_000 });
   await ctx.alphaPage!.waitForFunction(() => (window as unknown as { __dotsQwenSentEvents?: { type: string; item?: { content?: { text?: string }[] } }[] }).__dotsQwenSentEvents?.some(event => event.type === 'conversation.item.create' && event.item?.content?.some(part => part.text?.includes('Voice response returned from the model.'))) === true, null, { timeout: 10_000 });
   const spokenResponses = await ctx.alphaPage!.evaluate(() => (window as unknown as { __dotsQwenSentEvents: { type: string; response?: { modalities?: string[] } }[] }).__dotsQwenSentEvents.filter(event => event.type === 'response.create'));
-  assert.equal(spokenResponses.length, 1, 'Only the actual Dot result should be spoken');
+  assert.equal(spokenResponses.length, 2, 'After the greeting, only the actual Dot result should be spoken');
   assert.deepEqual(spokenResponses[0].response?.modalities, ['text', 'audio']);
   const agentPrompt = ctx.mockModelPrompts.find(prompt => prompt.includes('E2E voice response — speak actual task result')) || '';
   assert(agentPrompt, 'The recognized Chinese speech was not dispatched through the tenant Agent task path');
@@ -194,14 +206,32 @@ export async function qwenWebRtc(ctx: UiScenarioContext, model = 'qwen3.8-omni-f
     return state.tasks.find(task => task.instruction === 'E2E voice long response — summarize actual task result')?.result;
   });
   assert.equal(longResult, qwenLongVoiceResult, 'The full result must remain in chat data while only the summary is spoken');
-  assert.equal(await ctx.alphaPage!.evaluate(() => (window as unknown as { __dotsQwenSentEvents: { type: string }[] }).__dotsQwenSentEvents.filter(event => event.type === 'response.create').length), 2);
+  assert.equal(await ctx.alphaPage!.evaluate(() => (window as unknown as { __dotsQwenSentEvents: { type: string }[] }).__dotsQwenSentEvents.filter(event => event.type === 'response.create').length), 3);
   await qwenInterruption(ctx, model);
+  assert.equal(await ctx.alphaPage!.evaluate(() => (window as unknown as { __dotsQwenExtraStreams: number }).__dotsQwenExtraStreams), 0, 'Voice results must reuse the chat snapshot without opening any additional SSE connections');
   await ctx.screenshot(ctx.alphaPage!, 'qwen-realtime-call-agent-result');
   await call.getByRole('button', { name: '结束通话' }).click();
   assert.equal(await ctx.alphaPage!.evaluate(() => (window as unknown as { __dotsQwenFakeTrack: { stopped: boolean } }).__dotsQwenFakeTrack.stopped), true, 'Ending the call must stop the microphone track');
   const callHistory = await ctx.alphaPage!.evaluate(async () => await fetch('/api/voice-calls').then(response => response.json())) as { endedAt: string | null }[];
   assert(callHistory.some(item => item.endedAt), 'The Qwen call should be durably recorded when it ends');
   assert.equal(await ctx.alphaPage!.evaluate(async ({ callId, taskId }) => (await fetch(`/api/voice-calls/${callId}/speech`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ taskId }) })).status, { callId: turnResult.callId, taskId: turnResult.task.id }), 404, 'Ended calls cannot start new speech preparation');
+
+  // Input can arrive while replaceTrack/model setup is still resolving. A late
+  // setup acknowledgement must never insert the greeting into that user turn.
+  const startupUpdates = await ctx.alphaPage!.evaluate(() => (window as unknown as QwenInterruptionWindow).__dotsQwenSentEvents.filter(event => event.type === 'session.update').length);
+  await ctx.openProfile(ctx.alphaPage!);
+  await ctx.alphaPage!.getByTestId('profile-voice-call-launch').click();
+  await ctx.alphaPage!.waitForFunction(count => (window as unknown as QwenInterruptionWindow).__dotsQwenSentEvents.filter(event => event.type === 'session.update').length > count, startupUpdates);
+  const startupResponses = await ctx.alphaPage!.evaluate(() => (window as unknown as QwenInterruptionWindow).__dotsQwenAudioResponses.length);
+  await ctx.alphaPage!.evaluate(() => {
+    const view = window as unknown as QwenInterruptionWindow & { __dotsQwenConfirmSession: () => void };
+    view.__dotsQwenEventChannel.emit({ type: 'input_audio_buffer.speech_started', item_id: 'early-startup-input' });
+    view.__dotsQwenConfirmSession();
+  });
+  await ctx.alphaPage!.waitForFunction(() => (window as unknown as { __dotsQwenFakeSender: { track: unknown } }).__dotsQwenFakeSender.track !== null);
+  assert.equal(await ctx.alphaPage!.evaluate(() => (window as unknown as QwenInterruptionWindow).__dotsQwenAudioResponses.length), startupResponses, 'Speaking during startup must suppress the late greeting');
+  await ctx.alphaPage!.getByTestId('voice-call').getByRole('button', { name: '结束通话' }).click();
+  await ctx.alphaPage!.evaluate(() => (window as unknown as { __dotsRestoreEventSource: () => void }).__dotsRestoreEventSource());
 
   await ctx.alphaPage!.evaluate("Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: { getUserMedia: async function () { throw new Error('E2E microphone permission denied'); } } })");
   await ctx.openProfile(ctx.alphaPage!);
@@ -252,6 +282,24 @@ async function qwenInterruption(ctx: UiScenarioContext, model: string) {
   const spoken = () => page.evaluate(() => (window as unknown as QwenInterruptionWindow).__dotsQwenSentEvents.filter(event => event.type === 'response.create').length);
   const waitSpoken = (count: number) => page.waitForFunction(count => (window as unknown as QwenInterruptionWindow).__dotsQwenSentEvents.filter(event => event.type === 'response.create').length === count, count);
   let count = await spoken();
+
+  // The shared chat snapshot may contain the result before POST /turns returns.
+  // Attaching the follower must immediately reconcile it, without another SSE.
+  let releaseCachedAcceptance = () => {};
+  const cachedAcceptance = new Promise<void>(resolve => { releaseCachedAcceptance = resolve; });
+  const cachedRoute = '**/api/voice-calls/*/turns';
+  await page.route(cachedRoute, async route => {
+    if (route.request().postDataJSON().turnId !== 'cached-result') { await route.continue(); return; }
+    const response = await route.fetch();
+    await cachedAcceptance;
+    await route.fulfill({ response });
+  });
+  try {
+    await input('cached-result');
+    await waitDone('cached-result');
+    releaseCachedAcceptance();
+    await page.waitForFunction(count => (window as unknown as QwenInterruptionWindow).__dotsQwenSentEvents.filter(event => event.type === 'response.create').length === count, ++count, { timeout: 2000 });
+  } finally { releaseCachedAcceptance(); await page.unroute(cachedRoute); }
 
   // A completed result queued behind the automatic text response is obsolete
   // as soon as the user starts speaking, before the next transcript arrives.

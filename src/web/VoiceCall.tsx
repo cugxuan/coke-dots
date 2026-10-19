@@ -4,7 +4,7 @@ import { SpeechTurnCollector } from '../shared/speech-turn.ts';
 import { decodeVolcengineFloat32Pcm } from '../shared/volcengine-audio.ts';
 import { QWEN_REALTIME_MODEL, qwenSessionConfig } from '../shared/qwen-realtime.ts';
 import { VOICE_SUMMARY_FALLBACK, VOICE_SUMMARY_THRESHOLD } from '../shared/voice-speech.ts';
-import { appFetch, appPath, appWebSocketUrl } from './api.ts';
+import { appFetch, appWebSocketUrl } from './api.ts';
 import { DotAvatar } from './DotAvatar.tsx';
 import './voice-call.css';
 
@@ -26,9 +26,10 @@ type RecognitionConstructor = new () => RecognitionLike;
 type SpeechWindow = Window & { SpeechRecognition?: RecognitionConstructor; webkitSpeechRecognition?: RecognitionConstructor };
 const MOBILE_CALL_LAYOUT_QUERY = '(max-width: 520px), (max-width: 1024px) and (pointer: coarse)';
 
-export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscript, onClose }: {
+export function VoiceCall({ dotName, appearance, snapshot, initialAudioContext, onTranscript, onClose }: {
   dotName: string;
   appearance: DotAppearance;
+  snapshot: Snapshot;
   initialAudioContext: AudioContext | null;
   onTranscript: (text: string, waitingTaskId: string | undefined, callId: string, turnId: string) => Promise<Task>;
   onClose: () => void;
@@ -83,10 +84,17 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
   const onTranscriptRef = useRef(onTranscript);
   const waitingTaskIdRef = useRef<string | null>(null);
   const taskFollowStopsRef = useRef(new Set<() => void>());
+  const snapshotRef = useRef(snapshot);
+  const taskSnapshotListenersRef = useRef(new Set<(snapshot: Snapshot) => void>());
   const speechPreparationsRef = useRef(new Set<AbortController>());
+  snapshotRef.current = snapshot;
   onTranscriptRef.current = onTranscript;
   mutedRef.current = muted;
   speakerRef.current = speakerOn;
+
+  useEffect(() => {
+    for (const reconcile of taskSnapshotListenersRef.current) reconcile(snapshot);
+  }, [snapshot]);
 
   useEffect(() => {
     const query = window.matchMedia(MOBILE_CALL_LAYOUT_QUERY);
@@ -186,6 +194,7 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
         item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: `结果播报请求：请只自然朗读下方正文，不要读出字段名或添加任何内容。\n正文（JSON 字符串）：${JSON.stringify(text)}` }] },
       }));
       qwenRequestedSpeechTurn = turn;
+      setStatus('正在准备语音…');
       channel.send(JSON.stringify({ type: 'response.create', response: { modalities: ['text', 'audio'] } }));
       return true;
     };
@@ -244,16 +253,18 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
     }
 
     const followTask = (submittedTask: Task, turn: number) => new Promise<void>((resolve, reject) => {
-      let stream: EventSource | null = null;
       let fallbackTimer: number | null = null;
       let fallbackBusy = false;
+      let lastSnapshotAt = Date.now();
       let settled = false;
+      const controller = new AbortController();
       const finish = (error?: Error) => {
         if (settled) return;
         settled = true;
         if (fallbackTimer !== null) window.clearInterval(fallbackTimer);
         window.clearTimeout(timeout);
-        stream?.close();
+        controller.abort();
+        taskSnapshotListenersRef.current.delete(reconcile);
         taskFollowStopsRef.current.delete(finish);
         if (error) reject(error); else resolve();
       };
@@ -264,8 +275,11 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
       const reconcile = (snapshot: Snapshot) => {
         if (settled) return;
         if (!isCurrentTurn(turn)) { finish(); return; }
+        lastSnapshotAt = Date.now();
         const task = snapshot.tasks.find(candidate => candidate.id === submittedTask.id);
-        if (!task) { finish(new Error('找不到刚提交的任务')); return; }
+        // The shared snapshot can precede acceptance, especially when replying
+        // to a waiting task. Never replay that task's previous question/result.
+        if (!task || Date.parse(task.updatedAt) < Date.parse(submittedTask.updatedAt)) return;
         const latestDotMessage = [...snapshot.entries].reverse().find(entry => entry.taskId === task.id && entry.kind === 'dot')?.body || '';
         if (task.status === 'done') {
           if (waitingTaskIdRef.current === task.id) waitingTaskIdRef.current = null;
@@ -295,27 +309,23 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
         if (fallbackBusy || settled || !activeRef.current) return;
         fallbackBusy = true;
         try {
-          const response = await appFetch('/api/state');
+          const response = await appFetch('/api/state', { signal: controller.signal });
           if (response.ok) reconcile(await response.json() as Snapshot);
-        } catch { /* EventSource reconnects automatically; this is only a recovery probe. */ }
+        } catch { /* The shared event stream reconnects; polling only recovers a quiet/broken stream. */ }
         finally { fallbackBusy = false; }
       };
 
       taskFollowStopsRef.current.add(finish);
-      if (typeof EventSource === 'undefined') {
-        void refreshSnapshot();
-        fallbackTimer = window.setInterval(() => void refreshSnapshot(), 1000);
-        return;
-      }
-      stream = new EventSource(appPath('/api/events'));
-      stream.onmessage = event => {
-        if (fallbackTimer !== null) { window.clearInterval(fallbackTimer); fallbackTimer = null; }
-        try { reconcile(JSON.parse(event.data) as Snapshot); }
-        catch (error) { finish(error instanceof Error ? error : new Error('任务进度事件无效')); }
-      };
-      stream.onerror = () => {
-        if (fallbackTimer === null) fallbackTimer = window.setInterval(() => void refreshSnapshot(), 5000);
-      };
+      taskSnapshotListenersRef.current.add(reconcile);
+      // Chat and speech consume the same update. A second full-state SSE
+      // connection can lag behind the result already rendered in chat.
+      const cached = snapshotRef.current;
+      const cachedTask = cached.tasks.find(task => task.id === submittedTask.id);
+      reconcile(cachedTask && Date.parse(cachedTask.updatedAt) >= Date.parse(submittedTask.updatedAt)
+        ? cached : { ...cached, tasks: [submittedTask] });
+      if (!settled) fallbackTimer = window.setInterval(() => {
+        if (Date.now() - lastSnapshotAt >= 5000) void refreshSnapshot();
+      }, 5000);
     });
 
     const stopTaskFollowers = () => {
@@ -388,12 +398,16 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
           return;
         }
         void qwenAudioSender.replaceTrack(qwenMicrophoneTrack).then(() => {
-          if (!activeRef.current) {
+          if (!activeRef.current || disposed) {
             void qwenAudioSender?.replaceTrack(null);
             return;
           }
+          if (qwenModelReady) return;
           qwenModelReady = true;
           setStatus(mutedRef.current ? '麦克风已静音' : '正在聆听');
+          // One explicit greeting, only while the initial turn is still current.
+          // It uses the same interruption rules as every subsequent result.
+          if (speechTurn === 0) speak(`你好，我是 ${dotName}，有什么我可以帮你？`, 0);
           flushQwenSpeech();
         }).catch(() => setCallError('Qwen 实时语音麦克风音轨启动失败'));
         return;
@@ -435,6 +449,7 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
           // when response.created for the interrupted request arrives late.
           qwenPlaybackBlockedRef.current = !isCurrentTurn(turn);
           if (remoteAudioRef.current) remoteAudioRef.current.muted = !speakerRef.current || qwenPlaybackBlockedRef.current;
+          if (isCurrentTurn(turn)) setStatus('正在播报');
         }
         return;
       }
