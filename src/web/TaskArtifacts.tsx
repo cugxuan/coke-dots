@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import type { TaskArtifact } from '../shared/types.ts';
 import { appFetch, appPath } from './api.ts';
 import './task-artifacts.css';
@@ -14,6 +14,8 @@ export function TaskArtifacts({ taskId, refreshKey, autoPreview = true, onOpenCo
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [previewUrls, setPreviewUrls] = useState<Record<string, string>>({});
   const [openingPath, setOpeningPath] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const listId = useId();
 
   useEffect(() => {
     const controller = new AbortController();
@@ -21,6 +23,7 @@ export function TaskArtifacts({ taskId, refreshKey, autoPreview = true, onOpenCo
     setError('');
     setPreviewPath(null);
     setPreviewUrls({});
+    setExpanded(false);
     void (async () => {
       try {
         const response = await appFetch(`/api/tasks/${encodeURIComponent(taskId)}/artifacts`, { signal: controller.signal });
@@ -88,8 +91,8 @@ export function TaskArtifacts({ taskId, refreshKey, autoPreview = true, onOpenCo
     <div className="task-artifacts-heading"><span aria-hidden="true">▤</span><strong>生成的文件</strong>{artifacts.length > 0 && <small>{artifacts.length}</small>}</div>
     {artifacts.length > 0 && <p className="task-artifact-hint">下载到你自己的电脑，随时查看和使用。</p>}
     {error && <p className="task-artifact-error" role="status">{error}</p>}
-    {artifacts.length > 0 && <div className="task-artifact-list">
-      {artifacts.map(artifact => {
+    {artifacts.length > 0 && <div className="task-artifact-list" id={listId}>
+      {(expanded ? artifacts : artifacts.slice(0, 5)).map(artifact => {
         const url = contentUrl(taskId, artifact.path);
         const isPreviewed = previewPath === artifact.path;
         return <article key={artifact.path} className="task-artifact" data-testid="task-artifact" data-artifact-path={artifact.path}>
@@ -102,6 +105,7 @@ export function TaskArtifacts({ taskId, refreshKey, autoPreview = true, onOpenCo
         </article>;
       })}
     </div>}
+    {artifacts.length > 5 && <button type="button" className="task-artifact-action task-artifact-toggle" aria-expanded={expanded} aria-controls={listId} onClick={() => setExpanded(current => !current)}><span>{expanded ? '收起文件列表' : `展开其余 ${artifacts.length - 5} 个文件`}</span><span className="task-artifact-chevron" aria-hidden="true">⌄</span></button>}
   </section>;
 }
 
