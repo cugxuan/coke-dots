@@ -1,7 +1,7 @@
 type InputTurn = { turn: number; id: string };
 type ToolCall = { call_id: string; name: string; arguments: string };
 type ResponseState = { turn: number; input?: InputTurn; requested: boolean; record: boolean; calls: Map<string, ToolCall>; texts: Map<string, string> };
-type Request = { turn: number; text?: string; outputs?: { call_id: string; output: string }[] };
+type Request = { turn: number; input?: InputTurn; text?: string; outputs?: { call_id: string; output: string }[] };
 export type QwenVoiceEvent = {
   type?: string; event_id?: string; item_id?: string; response_id?: string; transcript?: string; text?: string; stash?: string;
   call_id?: string; name?: string; arguments?: string;
@@ -63,9 +63,9 @@ export class QwenVoiceSession {
   private createResponse(event: QwenVoiceEvent): ResponseState {
     const request = this.requested;
     this.requested = undefined;
-    const input = request ? undefined : this.pendingInputs.shift();
+    const input = request?.input || (request ? undefined : this.pendingInputs.shift());
     const state: ResponseState = {
-      turn: request?.turn ?? input?.turn ?? -1, input, requested: Boolean(request), record: !request,
+      turn: request?.turn ?? input?.turn ?? -1, input, requested: Boolean(request), record: !request?.text,
       calls: new Map(), texts: new Map(),
     };
     this.responses.set(event.response?.id || 'response', state);
@@ -165,7 +165,7 @@ export class QwenVoiceSession {
       result = await this.hooks.tool(call.name, JSON.parse(call.arguments), state.input);
     } catch (error) { result = { error: error instanceof Error ? error.message : '任务请求失败，请重试。' }; }
     this.pendingTools.delete(call.call_id);
-    this.requests.unshift({ turn: state.turn, outputs: [{ call_id: call.call_id, output: JSON.stringify(result) }] });
+    this.requests.unshift({ turn: state.turn, input: state.input, outputs: [{ call_id: call.call_id, output: JSON.stringify(result) }] });
     this.flush();
   }
 

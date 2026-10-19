@@ -2,6 +2,8 @@
 
 Qwen calls answer ordinary questions directly and delegate work only through explicit function calls. A transcription event saves the user's words; it no longer starts an Agent task. Browser SpeechRecognition and Volcano providers retain their existing task flow.
 
+Explicit requests to use the cloud computer, run code, or manipulate files take precedence over the simple-question rule, even when the numerical answer is obvious. Spoken tool receipts and progress answers are saved after their source transcript; reading an already-saved task result does not duplicate it in chat.
+
 The Qwen session exposes two tools using the provider's nested `function` schema:
 
 - `delegate_task(instruction, task_id?)` creates work or resumes a waiting task from this call. Instructions include the conversation context needed by the Agent. Acceptance returns immediately; queued work is not reported as completed.

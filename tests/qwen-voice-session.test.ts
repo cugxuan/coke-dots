@@ -75,6 +75,19 @@ test('a fast direct answer waits for delayed transcription so chat retains user/
   assert.deepEqual(f.records.map(record => record.role), ['user', 'assistant']);
 });
 
+test('tool-based spoken answers are recorded after their input without repeating task-result readouts', async () => {
+  const f = fixture();
+  f.start('status-input'); f.created('status-tool'); f.done('status-tool', [{ ...f.tool(), name: 'get_task_status' }]);
+  await tick();
+  f.created('status-answer'); f.done('status-answer', [{ type: 'message', id: 'status-text', content: [{ transcript: '任务还在处理中。' }] }]);
+  assert.equal(f.records.length, 0);
+  f.transcript('status-input', '进度如何？');
+  assert.deepEqual(f.records.map(record => record.text), ['进度如何？', '任务还在处理中。']);
+  f.session.speak('完整结果已经保存在聊天中。', f.turn);
+  f.created('readout'); f.done('readout', [{ type: 'message', content: [{ transcript: '完整结果已经保存在聊天中。' }] }]);
+  assert.equal(f.records.length, 2);
+});
+
 test('late task acceptance stays silent while a new direct answer can play', async () => {
   const f = fixture();
   let release!: (value: { task_id: string; status: string }) => void;
