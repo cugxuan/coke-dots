@@ -8,6 +8,7 @@ import { createRunMetrics } from './agent-metrics.mjs';
 import { createBrowserExecutor } from './browser-executor.mjs';
 import { boundedToolContext, cloudSessionSettings, modelProfile, reasoningTool } from './model-policy.mjs';
 import { parseDelegations } from './task-delegation.mjs';
+import { createPiTurnRunner } from './pi-turn-runner.mjs';
 
 const decisionStatuses = new Set(['done', 'waiting', 'scheduled', 'delegating']);
 const piTools = ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls'];
@@ -35,7 +36,7 @@ async function runPi(input, cwd, config, injectedSdk) {
   let repairingResult = false;
   let repairRequests = 0;
   const sdk = injectedSdk || await import('@mariozechner/pi-coding-agent');
-  const { streamSimpleOpenAICompletions } = await import('@mariozechner/pi-ai');
+  const { streamSimpleOpenAICompletions, isContextOverflow } = await import('@mariozechner/pi-ai');
   const report = createPiProgressReporter(input.onProgress, [config.apiKey, input.computer?.workerToken, input.dingtalkDocumentsBridge?.token, input.dingtalkCalendarBridge?.token]);
   const provider = 'coke-dots-shared';
   const authStorage = sdk.AuthStorage.inMemory();
@@ -127,17 +128,16 @@ async function runPi(input, cwd, config, injectedSdk) {
       return onPayload ? await onPayload(payload, model) : undefined;
     };
   }
-  const abortSession = () => { if (session.abort) void session.abort().catch(() => undefined); else session.dispose(); };
-  let compaction;
-  let finishCompaction;
+  const abortSession = () => {
+    session.abortCompaction?.();
+    if (session.abort) void session.abort().catch(() => undefined); else session.dispose();
+  };
   let compactionDeadline;
   let repairToolCall = false;
   let completedAssistant;
   const unsubscribe = session.subscribe?.(event => {
     metrics.event(event); report(event);
-    // Overflow compaction can remove a successful final reply from active context
-    // before prompt() resolves. Keep the actual emitted answer, not that mutable
-    // context (which may then end at an already completed tool call).
+    // Keep the actual emitted answer independently of mutable compacted context.
     if (event.type === 'message_end' && event.message?.role === 'assistant') completedAssistant = event.message;
     if (event.type === 'agent_end') {
       completedAssistant = [...event.messages].reverse().find(row => row?.role === 'assistant') || completedAssistant;
@@ -147,18 +147,16 @@ async function runPi(input, cwd, config, injectedSdk) {
       abortSession();
     }
     if (event.type === 'compaction_start') {
-      compaction = new Promise(resolve => { finishCompaction = resolve; });
       compactionDeadline = setTimeout(() => session.abortCompaction(), 90_000);
     }
-    if (event.type === 'compaction_end') { clearTimeout(compactionDeadline); finishCompaction?.(); }
+    if (event.type === 'compaction_end') clearTimeout(compactionDeadline);
   });
+  const turns = createPiTurnRunner(session, { signal: input.signal, isContextOverflow,
+    threshold: profile.contextWindow - cloudSessionSettings.compaction.reserveTokens });
   if (input.signal?.aborted) abortSession();
   else input.signal?.addEventListener('abort', abortSession, { once: true });
   const completedText = async () => {
     const assistant = completedAssistant || [...session.messages].reverse().find(row => row?.role === 'assistant');
-    // Pi starts automatic compaction from agent_end without awaiting it in prompt().
-    // Capture the answer before the compactor replaces the active context.
-    if (compaction) await compaction;
     if (input.signal?.aborted) throw input.signal.reason || new Error('Task stopped');
     if (['error', 'aborted'].includes(assistant?.stopReason)) throw new Error(`模型请求失败：${assistant.errorMessage || assistant.stopReason}`);
     if (assistant?.stopReason === 'length') throw new Error('Pi 的回复达到 8192 token 输出上限，未生成完整任务结果。请先检查任务目录是否已产生文件，再决定是否重试。');
@@ -170,7 +168,7 @@ async function runPi(input, cwd, config, injectedSdk) {
   try {
     if (input.signal?.aborted) throw input.signal.reason || new Error('Task stopped');
     metrics.ready();
-    await session.prompt(input.prompt);
+    await turns.prompt(input.prompt);
     const text = await completedText();
     let decision;
     try { decision = parseDecision(text); } catch (error) {
@@ -184,7 +182,7 @@ async function runPi(input, cwd, config, injectedSdk) {
       const deadline = setTimeout(() => { timedOut = true; abortSession(); }, 30_000);
       try {
         completedAssistant = undefined;
-        await session.prompt(resultRepairInstruction + JSON.stringify({ validationError: error.message, previousAnswer: text }));
+        await turns.prompt(resultRepairInstruction + JSON.stringify({ validationError: error.message, previousAnswer: text }), { recoverOverflow: false });
         if (timedOut) throw new Error('任务结果格式整理超时；已保留会话和已执行操作。');
         if (repairToolCall) throw new Error('任务结果格式整理尝试调用工具，已停止；已保留此前操作。');
         const repaired = await completedText();
@@ -199,6 +197,7 @@ async function runPi(input, cwd, config, injectedSdk) {
     const timing = metrics.finish();
     await writeFile(path.join(cwd, '.coke-dots-agent-runtime', 'last-run-metrics.json'), JSON.stringify(timing), { mode: 0o600 }).catch(() => undefined);
     unsubscribe?.();
+    turns.dispose();
     input.signal?.removeEventListener('abort', abortSession);
     session.dispose();
     await browserExecutor?.close();

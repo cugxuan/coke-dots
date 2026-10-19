@@ -23,7 +23,7 @@ async function fixture(replies, verify, options = {}) {
     const reply = replies[requests.length - 1];
     if (!reply) { res.writeHead(400); res.end('Unexpected extra request'); return; }
     if (reply.onRequest) reply.onRequest();
-    if (reply.httpStatus) { res.writeHead(reply.httpStatus); res.end(JSON.stringify({ error: { message: 'fixture provider failure' } })); return; }
+    if (reply.httpStatus) { res.writeHead(reply.httpStatus); res.end(JSON.stringify({ error: { message: reply.error || 'fixture provider failure' } })); return; }
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     const emit = (delta, finish_reason = null) => res.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta, finish_reason }] })}\n\n`);
     emit({ role: 'assistant', ...(reply.tools ? { tool_calls: reply.tools } : { content: reply.text ?? '' }) });
@@ -55,31 +55,30 @@ test('Pi sends the app result contract as a system instruction and accepts a val
   });
 });
 
-test('Pi retains the completed answer when overflow compaction temporarily removes it from active context', async () => {
+test('Pi accepts a successful answer above the soft budget without compacting or replaying it', async () => {
   await fixture([
-    { tools: bash("printf 'saved once\\n' >> completed.txt; printf 'evidence %.0s' {1..16000}") },
+    { tools: bash("printf 'saved once\\n' >> completed.txt; printf 'evidence %.0s' {1..12000}") },
     { text: decision('已保存 completed.txt。'), usage: { prompt_tokens: 42725, completion_tokens: 665, total_tokens: 43390 } },
-    { text: 'The task is complete. completed.txt was written once; no further work remains.' },
   ], async ({ run, requests, events, cwd }) => {
     const result = await run({ prompt: 'Save evidence once and report completion.' });
     assert.equal(result.status, 'done');
     assert.equal(result.message, '已保存 completed.txt。');
-    // Pi schedules an overflow continuation after compaction; it must not replay work.
+    // Neither a delayed SDK continuation nor an unnecessary summary may run.
     await new Promise(resolve => setTimeout(resolve, 200));
-    assert.equal(requests.length, 3, 'one tool request, final answer, and compaction only');
+    assert.equal(requests.length, 2, 'one tool request and the final answer only');
     assert.equal(await readFile(path.join(cwd, 'completed.txt'), 'utf8'), 'saved once\n');
-    assert.equal(events.filter(event => event.kind === 'metrics').at(-1).timing.compactions, 1);
+    assert.equal(events.filter(event => event.kind === 'metrics').at(-1).timing.compactions, 0);
     const directory = path.join(cwd, '.coke-dots-agent-runtime/pi-sessions');
     const [file] = await readdir(directory);
     const journal = (await readFile(path.join(directory, file), 'utf8')).trim().split('\n').map(JSON.parse);
-    assert(journal.some(row => row.type === 'compaction'), 'the real SDK persisted a compaction');
+    assert(!journal.some(row => row.type === 'compaction'));
     assert.equal(journal.filter(row => row.message?.role === 'toolResult').length, 1);
   });
 });
 
-test('Pi repairs captured final JSON missing its closing brace after compaction without replaying tools', async () => {
+test('Pi compacts before repairing oversized malformed JSON without replaying tools', async () => {
   await fixture([
-    { tools: bash("printf 'saved once\\n' >> completed.txt; printf 'evidence %.0s' {1..16000}") },
+    { tools: bash("printf 'saved once\\n' >> completed.txt; printf 'evidence %.0s' {1..12000}") },
     { text: decision('已保存结果；来源 B 需要登录。', 'waiting').slice(0, -1), usage: { prompt_tokens: 42725, completion_tokens: 20, total_tokens: 42745 } },
     { text: 'Evidence was saved. Source B requires login. Do not repeat the write.' },
     { text: decision('已保存结果；来源 B 需要登录。', 'waiting') },
@@ -95,15 +94,120 @@ test('Pi repairs captured final JSON missing its closing brace after compaction 
   });
 });
 
-test('Pi still rejects an empty final answer after compaction instead of using an older tool turn', async () => {
+test('Pi still rejects an empty answer above the budget instead of using an older tool turn', async () => {
   await fixture([
-    { tools: bash("printf 'evidence %.0s' {1..16000}") },
+    { tools: bash("printf 'evidence %.0s' {1..12000}") },
     { text: '', usage: { prompt_tokens: 42725, completion_tokens: 0, total_tokens: 42725 } },
-    { text: 'The tool returned evidence but there was no final answer.' },
   ], async ({ run, requests }) => {
     await assert.rejects(run({ prompt: 'Inspect fixture evidence.' }), /Pi returned no assistant text/);
     await new Promise(resolve => setTimeout(resolve, 200));
+    assert.equal(requests.length, 2);
+  });
+});
+
+const largeUsage = { prompt_tokens: 33_000, completion_tokens: 20, total_tokens: 33_020 };
+const saveEvidence = "printf 'once\\n' >> performed.txt; printf 'evidence %.0s' {1..12000}";
+const summary = 'Performed the write once. Evidence is in performed.txt and the original journal. Continue from the completed tool results; do not repeat the write.';
+
+test('Pi compacts a completed multi-tool batch and continues with each side effect performed once', async () => {
+  const tools = [
+    ...bash(saveEvidence),
+    ...bash("printf 'second once\\n' >> second.txt").map(tool => ({ ...tool, index: 1, id: 'call-2' })),
+  ];
+  await fixture([{ tools, usage: largeUsage }, { text: summary }, { text: decision('both saved') }], async ({ run, requests, cwd }) => {
+    assert.equal((await run({ prompt: 'Save both files once.' })).message, 'both saved');
     assert.equal(requests.length, 3);
+    assert(!requests[1].tools?.length);
+    assert.equal(await readFile(path.join(cwd, 'performed.txt'), 'utf8'), 'once\n');
+    assert.equal(await readFile(path.join(cwd, 'second.txt'), 'utf8'), 'second once\n');
+    const lastMessages = requests[2].messages;
+    for (const message of lastMessages.filter(row => row.role === 'tool')) {
+      assert(lastMessages.some(row => row.tool_calls?.some(call => call.id === message.tool_call_id)), 'summary must retain tool-call/result pairs');
+    }
+    assert.match(JSON.stringify(lastMessages), /Performed the write once/);
+  });
+});
+
+test('Pi recovers an explicit provider overflow once and resumes after already completed tools', async () => {
+  await fixture([
+    { tools: bash(saveEvidence) },
+    { httpStatus: 400, error: 'maximum context length exceeded' },
+    { text: summary },
+    { text: decision('recovered') },
+  ], async ({ run, requests, cwd }) => {
+    assert.equal((await run({ prompt: 'Save evidence and finish.' })).message, 'recovered');
+    await new Promise(resolve => setTimeout(resolve, 200));
+    assert.equal(requests.length, 4);
+    assert.equal(await readFile(path.join(cwd, 'performed.txt'), 'utf8'), 'once\n');
+  });
+});
+
+test('Pi stops after a second explicit overflow instead of repeatedly compacting or replaying tools', async () => {
+  await fixture([
+    { tools: bash(saveEvidence) },
+    { httpStatus: 400, error: 'maximum context length exceeded' },
+    { text: summary },
+    { httpStatus: 400, error: 'maximum context length exceeded' },
+  ], async ({ run, requests, cwd }) => {
+    await assert.rejects(run({ prompt: 'Save evidence and finish.' }), /模型请求失败/);
+    await new Promise(resolve => setTimeout(resolve, 200));
+    assert.equal(requests.length, 4);
+    assert.equal(await readFile(path.join(cwd, 'performed.txt'), 'utf8'), 'once\n');
+  });
+});
+
+test('Pi cancellation during compaction preserves the completed tool and never continues', async () => {
+  const controller = new AbortController();
+  await fixture([
+    { tools: bash(saveEvidence), usage: largeUsage },
+    { text: summary, onRequest: () => controller.abort(new Error('fixture cancelled during summary')) },
+  ], async ({ run, requests, cwd }) => {
+    await assert.rejects(run({ prompt: 'Save evidence and finish.' }), /fixture cancelled during summary/);
+    await new Promise(resolve => setTimeout(resolve, 200));
+    assert.equal(requests.length, 2);
+    assert.equal(await readFile(path.join(cwd, 'performed.txt'), 'utf8'), 'once\n');
+  }, { signal: controller.signal });
+});
+
+test('Pi compaction failure reports preserved progress and does not retry the task', async () => {
+  await fixture([
+    { tools: bash(saveEvidence), usage: largeUsage },
+    { httpStatus: 401 },
+  ], async ({ run, requests, cwd }) => {
+    await assert.rejects(run({ prompt: 'Save evidence and finish.' }), /上下文整理失败；已保留任务文件和工具记录/);
+    assert.equal(requests.length, 2);
+    assert.equal(await readFile(path.join(cwd, 'performed.txt'), 'utf8'), 'once\n');
+  });
+});
+
+test('Pi retries a transient model failure after a yielded tool batch without replaying the tool', async () => {
+  await fixture([
+    { tools: bash(saveEvidence) },
+    { httpStatus: 429, error: 'rate limit exceeded' },
+    { httpStatus: 429, error: 'rate limit exceeded' },
+    { text: decision('retried') },
+  ], async ({ run, requests, cwd }) => {
+    assert.equal((await run({ prompt: 'Save evidence and finish.' })).message, 'retried');
+    assert.equal(requests.length, 4);
+    assert.equal(await readFile(path.join(cwd, 'performed.txt'), 'utf8'), 'once\n');
+  });
+});
+
+test('Pi compacts a large saved session only when the next user prompt arrives', async () => {
+  await fixture([
+    { tools: bash(saveEvidence) },
+    { text: decision('first result'), usage: largeUsage },
+    { text: summary + ' Final result: first result.' },
+    { text: decision('follow-up result') },
+  ], async ({ run, requests, cwd }) => {
+    const first = await run({ prompt: 'Save evidence and finish.' });
+    assert.equal(requests.length, 2);
+    const second = await run({ sessionId: first.sessionId, prompt: 'Read the previous result without repeating any tools.' });
+    assert.equal(second.sessionId, first.sessionId);
+    assert.equal(second.message, 'follow-up result');
+    assert.equal(requests.length, 4);
+    assert.match(JSON.stringify(requests[3].messages), /first result/);
+    assert.equal(await readFile(path.join(cwd, 'performed.txt'), 'utf8'), 'once\n');
   });
 });
 

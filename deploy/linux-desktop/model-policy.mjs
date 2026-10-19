@@ -24,7 +24,8 @@ export function modelProfile(config) {
     id: config.model, name: config.model, reasoning: deepseek,
     input: vision ? ['text', 'image'] : ['text'],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    // Deliberate working budget, not the provider's maximum context capacity.
+    // Soft working budget. pi-turn-runner owns compaction at tool boundaries;
+    // never feed this budget into Pi's automatic hard-overflow recovery.
     contextWindow: 40_000, maxTokens: 8_192,
     ...(deepseek ? { thinkingLevelMap: { minimal: 'high', low: 'high', medium: 'high', high: 'high', xhigh: 'max' } } : {}),
     compat: { supportsDeveloperRole: false, maxTokensField: 'max_tokens', ...(format ? { thinkingFormat: format } : {}) },
@@ -32,7 +33,7 @@ export function modelProfile(config) {
 }
 
 export const cloudSessionSettings = {
-  compaction: { enabled: true, reserveTokens: 8_000, keepRecentTokens: 8_000 },
+  compaction: { enabled: false, reserveTokens: 8_000, keepRecentTokens: 8_000 },
   retry: { enabled: true, maxRetries: 2, baseDelayMs: 1000, provider: { timeoutMs: 120_000, maxRetries: 1, maxRetryDelayMs: 10_000 } },
   enableInstallTelemetry: false,
 };

@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import * as realSdk from '@mariozechner/pi-coding-agent';
 import { runCloudKernel } from '../deploy/linux-desktop/cloud-kernel-adapter.mjs';
 
-test('real Pi compacts a large session, retains original evidence, and accounts for summary requests', { timeout: 30_000 }, async () => {
+test('real Pi compacts inside a tool loop before the final response, retains evidence and accounts for summaries', { timeout: 30_000 }, async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'dots-compaction-'));
   const taskId = '11111111-1111-4111-8111-111111111111';
   const cwd = path.join(root, 'tasks', taskId);
@@ -29,7 +29,7 @@ test('real Pi compacts a large session, retains original evidence, and accounts 
       emit({ role: 'assistant', content: summary ? 'Completed three reads of evidence.txt. The verified source is retained in evidence.txt and the original session journal. Final result: fixture facts preserved.' : JSON.stringify({ status: 'done', message: 'fixture facts preserved' }) });
       emit({}, 'stop');
     }
-    const input = summary ? 200 : normal === 4 ? 40_000 : 1000;
+    const input = summary ? 200 : normal === 3 ? 32_000 : 1000;
     expectedTotal += input + 20;
     res.write(`data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: input, completion_tokens: 20, total_tokens: input + 20 } })}\n\n`);
     res.end('data: [DONE]\n\n');
@@ -47,6 +47,9 @@ test('real Pi compacts a large session, retains original evidence, and accounts 
     assert.equal(result.status, 'done');
     assert.equal(result.message, 'fixture facts preserved');
     assert.equal(normal, 4); assert(summaries >= 1);
+    assert(!requests[3].tools?.length, 'compaction must happen before asking for the final answer');
+    assert(requests.at(-1).tools?.length, 'no compaction request after the final answer');
+    assert.match(JSON.stringify(requests.at(-1).messages), /Completed three reads/);
     assert(requests.every(request => request.max_tokens <= 8192));
     assert(requests.every(request => request.thinking?.type === 'disabled'));
     assert.equal(events.filter(event => event.kind === 'usage').at(-1).usage.total, expectedTotal, 'Summary requests must be included in reported usage');
