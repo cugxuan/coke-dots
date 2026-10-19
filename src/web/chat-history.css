@@ -1,0 +1,14 @@
+.chat-history-toolbar { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 24px; color: #8a8790; font-size: 12px; }
+.chat-history-toolbar button { display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 5px 9px; border: 1px solid #e6e3e9; border-radius: 8px; background: transparent; color: #6c6873; font: inherit; white-space: nowrap; cursor: pointer; }
+.chat-history-toolbar button:hover:enabled { background: #f5f3f7; color: #38333f; }
+.chat-history-toolbar button:disabled { opacity: .45; cursor: default; }
+.chat-history-toolbar button:focus-visible,.chat-history-empty button:focus-visible { outline: 2px solid #8d75b7; outline-offset: 2px; }
+.chat-history-empty { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 28px 16px; text-align: center; }
+.chat-history-empty h1 { margin: 22px 0 8px; color: #38343d; font-size: 23px; font-weight: 550; }
+.chat-history-empty p { margin: 0; color: #8a8790; font-size: 14px; }
+.chat-history-empty button { margin-top: 24px; padding: 6px; border: 0; background: transparent; color: #8a8790; font-size: 12px; cursor: pointer; }
+.dots-dark .chat-history-toolbar,.dots-dark .chat-history-empty p { color: #aaa5b0; }
+.dots-dark .chat-history-toolbar button { color: #c4becd; border-color: #46404d; }
+.dots-dark .chat-history-toolbar button:hover:enabled { background: #35303b; color: #f1edf4; }
+.dots-dark .chat-history-empty h1 { color: #f1edf4; }
+@media (max-width: 680px) { .chat-history-toolbar { padding: 8px 16px; } .chat-history-toolbar button { min-height: 36px; } .chat-history-empty h1 { font-size: 21px; } }

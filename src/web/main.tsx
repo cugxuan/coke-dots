@@ -1,7 +1,8 @@
 import { TaskProgress } from './TaskProgress.tsx';
 import React, { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { selectableEngines, type AttachmentSummary, type ChatMessageResult, type DotAppearance, type Engine, type Entry, type ScheduleSpec, type Snapshot, type Task, type VoiceCallSession } from '../shared/types.ts';
+import { selectableEngines, type AttachmentSummary, type ChatHistoryState, type ChatMessageResult, type DotAppearance, type Engine, type Entry, type ScheduleSpec, type Snapshot, type Task, type VoiceCallSession } from '../shared/types.ts';
+import { visibleCallHistory, visibleChatHistory } from '../shared/chat-history.ts';
 import { engineAvailabilityHint } from '../shared/engine-availability.ts';
 import { applySnapshotPatch, type SnapshotPatch } from '../shared/snapshot-patch.ts';
 import { appFetch, request } from './api.ts';
@@ -30,6 +31,7 @@ import './call-timeline.css';
 import './mobile-replica.css';
 import './computer-split.css';
 import './chat-routing.css';
+import './chat-history.css';
 import { MessageBody } from './MessageBody.tsx';
 import { MessageTimestamp } from './MessageTimestamp.tsx';
 import { LoginScreen } from './LoginScreen.tsx';
@@ -91,11 +93,43 @@ function App() {
   const [scheduleEndDate, setScheduleEndDate] = useState('');
   const [engine, setEngine] = useState<Engine>(defaultEngine);
   const [busy, setBusy] = useState(false);
+  const [clearingHistory, setClearingHistory] = useState(false);
+  const historyController = useRef<AbortController | null>(null);
   const [error, setError] = useState('');
   const [routeQuestion, setRouteQuestion] = useState<Extract<ChatMessageResult, { status: 'clarify' }> | null>(null);
   const [routeNotice, setRouteNotice] = useState<{ taskId: string; title: string; routing: string } | null>(null);
   const submissionController = useRef<AbortController | null>(null);
   const submissionIdentity = useRef<{ signature: string; id: string } | null>(null);
+
+  useEffect(() => {
+    setClearingHistory(false);
+    return () => { historyController.current?.abort(); historyController.current = null; };
+  }, [authContext?.tenant.id, authContext?.user.id]);
+
+  useEffect(() => {
+    setRouteQuestion(null); setRouteNotice(null);
+    submissionIdentity.current = null;
+    if (!selected) { submissionController.current?.abort(); submissionController.current = null; setBusy(false); }
+  }, [state.chatHistory?.revision]);
+
+  async function clearHistory() {
+    if (busy || historyController.current) return;
+    const controller = new AbortController(); historyController.current = controller;
+    setClearingHistory(true); setError('');
+    try {
+      const response = await appFetch('/api/chat/history/clear', { method: 'POST', signal: controller.signal });
+      if (!response.ok) throw new Error('清除历史失败，请重试。');
+      const history = await response.json() as ChatHistoryState;
+      controller.signal.throwIfAborted();
+      setState(previous => (previous.chatHistory?.revision ?? 0) > history.revision ? previous : { ...previous, chatHistory: history });
+      setRouteQuestion(null); setRouteNotice(null); submissionIdentity.current = null;
+      composerRef.current?.focus();
+    } catch (error) {
+      if (!controller.signal.aborted) setError(error instanceof Error ? error.message : '清除历史失败，请重试。');
+    } finally {
+      if (historyController.current === controller) { historyController.current = null; setClearingHistory(false); }
+    }
+  }
 
   useLayoutEffect(() => {
     const textarea = composerRef.current;
@@ -224,8 +258,11 @@ function App() {
     const stream = new EventSource(appPath('/api/events?updates=1'));
     let current: Snapshot | null = null;
     const update = (snapshot: Snapshot) => {
+      const initialized = current !== null;
       current = snapshot;
-      setState(snapshot); setStateLoaded(true);
+      setState(previous => initialized && (previous.chatHistory?.revision ?? 0) > (snapshot.chatHistory?.revision ?? 0)
+        ? { ...snapshot, chatHistory: previous.chatHistory } : snapshot);
+      setStateLoaded(true);
       setError(current => current === '与本机服务的连接已断开，正在重连。' ? '' : current);
     };
     stream.onmessage = event => update(JSON.parse(event.data) as Snapshot);
@@ -237,11 +274,13 @@ function App() {
       void appFetch('/api/auth/me').then(response => { if (response.status === 401) setAuthContext(null); }).catch(() => { /* Keep the session while the service restarts; EventSource retries. */ });
     };
     return () => stream.close();
-  }, [authContext?.tenant.id]);
+  }, [authContext?.tenant.id, authContext?.user.id]);
 
   const selectedTask = state.tasks.find(t => t.id === selected) || null;
   const selectedTaskMissing = stateLoaded && selected !== null && !selectedTask;
-  const entries = useMemo(() => selected ? state.entries.filter(e => e.taskId === selected) : state.entries, [state.entries, selected]);
+  const conversation = useMemo(() => visibleChatHistory(state), [state.tasks, state.entries, state.chatHistory]);
+  const entries = useMemo(() => selected ? state.entries.filter(e => e.taskId === selected) : conversation.entries, [state.entries, conversation.entries, selected]);
+  const recentTasks = view === 'chat' && !selected ? conversation.tasks : state.tasks;
   const taskById = useMemo(() => new Map(state.tasks.map(task => [task.id, task])), [state.tasks]);
   const progressEntry = useMemo(() => {
     const anchors = new Map<string, number>();
@@ -257,7 +296,7 @@ function App() {
     return anchors;
   }, [entries, taskById]);
   const currentVoiceCallScope = authContext ? `${authContext.tenant.id}:${authContext.user.id}` : '';
-  const currentVoiceCalls = voiceCallsScope === currentVoiceCallScope ? voiceCalls : [];
+  const currentVoiceCalls = useMemo(() => voiceCallsScope === currentVoiceCallScope ? visibleCallHistory(voiceCalls, state.chatHistory) : [], [voiceCallsScope, currentVoiceCallScope, voiceCalls, state.chatHistory]);
   const voiceCallsLoaded = voiceCallsScope === currentVoiceCallScope;
   const timelineItems = useMemo<ChatTimelineItem[]>(() => {
     const items: ChatTimelineItem[] = entries.map(entry => ({ id: `entry-${entry.id}`, at: entry.createdAt, source: 'entry', entry }));
@@ -329,6 +368,7 @@ function App() {
   }
 
   async function submit(choice?: { mode: 'new' | 'continue'; taskId?: string }) {
+    if (clearingHistory) return;
     if (!draft.trim() || busy || uploadingAttachments || submissionController.current || selectedTaskMissing) return;
     const keepRootDotConversation = selected === null;
     if (state.remoteEngines.includes(engine) && !state.availableEngines.includes(engine)) {
@@ -518,7 +558,7 @@ function App() {
       <div className="side-caption">Pinned</div>
       <button className={`sidebar-item ${view === 'pages' ? 'selected' : ''}`} aria-label="Pinned Scratchpad" onClick={() => { setSelectedPageId(null); setView('pages'); }}>▱ <span>Scratchpad</span></button>
       <div className="side-caption recent-caption">Recent</div>
-      <div className="task-links">{stateLoaded ? state.tasks.slice(0, 12).map(task => <button key={task.id} className={selected === task.id ? 'on' : ''} onClick={() => { setSelectedPageId(null); setView('chat'); setSelected(task.id); }}><span className={`status-dot ${task.status}`} />{task.title}</button>) : <span className="side-loading">恢复中…</span>}</div>
+      <div className="task-links">{stateLoaded ? recentTasks.slice(0, 12).map(task => <button key={task.id} className={selected === task.id ? 'on' : ''} onClick={() => { setSelectedPageId(null); setView('chat'); setSelected(task.id); }}><span className={`status-dot ${task.status}`} />{task.title}</button>) : <span className="side-loading">恢复中…</span>}</div>
       <button className="profile-link" onClick={() => { setSelectedPageId(null); setView('profile'); }}><DotAvatar appearance={state.profile} small /><span><strong>{state.profile.name}</strong><small>{authContext.user.email}</small></span><span>⌄</span></button>
     </aside>
     <main className="main">
@@ -534,8 +574,8 @@ function App() {
       {error && <div className="error-banner" role="alert">{error}<button onClick={() => setError('')}>×</button></div>}
       {computerConnectedToast && <div className="computer-connected-toast" data-testid="computer-connected-toast" role="status"><span className="computer-connected-icon" aria-hidden="true">✓</span><span>The computer is connected to your dot</span><button type="button" aria-label="Dismiss notification" onClick={() => setComputerConnectedToast(false)}>×</button></div>}
       {(view === 'home' || chatView) && <div className="chat-layout"><section className="chat-panel">
-        {!stateLoaded ? <div className="workspace-loading" role="status">正在恢复工作区…</div> : view === 'home' ? <div className="welcome chat-home" data-testid="chat-home"><h1>What's on your mind today?</h1></div> : !voiceCallsLoaded ? <div className="workspace-loading" role="status">正在恢复工作区…</div> : selectedTaskMissing ? <div className="workspace-loading" role="alert">此任务不存在，或不属于当前工作区。<button type="button" onClick={() => { setSelected(null); setSelectedPageId(null); }}>返回 Dot 对话</button></div> : !selectedTask && !hasConversationHistory ? <DotOnboarding profile={state.profile} computerAccess={state.computerAccess} onComputerAccess={saveComputerAccess} onEditSetup={openDotCustomizer} /> : <div className="timeline" ref={timelineRef} onScroll={() => { const timeline = timelineRef.current; if (timeline) timelineAtBottomRef.current = timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight <= 48; }}>
-          {!selectedTask && <div className="timeline-title">最近的对话和进度</div>}
+        {view === 'chat' && !selected && !selectedPageId && <div className="chat-history-toolbar"><span>{hasConversationHistory ? '最近的对话和进度' : '新的对话'}</span><button type="button" data-testid="clear-chat-history" disabled={!stateLoaded || !voiceCallsLoaded || !hasConversationHistory || busy || clearingHistory} title="清空当前账号在此工作区的 Dot 对话；任务和文件保留在 Activity" onClick={() => void clearHistory()}><svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true"><path d="m9 5 10 10M6 18l-3-3a2 2 0 0 1 0-3l8-8a2 2 0 0 1 3 0l6 6a2 2 0 0 1 0 3l-6 6H7l-1-1Zm8 1h7" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>{clearingHistory ? '清除中…' : '清除历史'}</button></div>}
+        {!stateLoaded ? <div className="workspace-loading" role="status">正在恢复工作区…</div> : view === 'home' ? <div className="welcome chat-home" data-testid="chat-home"><h1>What's on your mind today?</h1></div> : !voiceCallsLoaded ? <div className="workspace-loading" role="status">正在恢复工作区…</div> : selectedTaskMissing ? <div className="workspace-loading" role="alert">此任务不存在，或不属于当前工作区。<button type="button" onClick={() => { setSelected(null); setSelectedPageId(null); }}>返回 Dot 对话</button></div> : !selectedTask && !hasConversationHistory ? state.chatHistory?.clearedAt ? <div className="chat-history-empty" data-testid="chat-history-empty"><DotAvatar appearance={state.profile} /><h1>开始一段新对话</h1><p>发消息或打电话给 {state.profile.name}。</p><button type="button" onClick={() => setView('activity')}>在 Activity 查看过往任务和文件</button></div> : <DotOnboarding profile={state.profile} computerAccess={state.computerAccess} onComputerAccess={saveComputerAccess} onEditSetup={openDotCustomizer} /> : <div className="timeline" ref={timelineRef} onScroll={() => { const timeline = timelineRef.current; if (timeline) timelineAtBottomRef.current = timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight <= 48; }}>
           {timelineItems.map(item => item.source === 'entry'
             ? <Fragment key={item.id}>
               <article data-testid="chat-timeline-item" data-timestamp={item.at} className={`message ${item.entry.kind}`}>
@@ -562,13 +602,13 @@ function App() {
               {routeQuestion.candidates.map(candidate => <button type="button" onMouseDown={event => event.preventDefault()} key={candidate.id} disabled={busy} onClick={() => void submit({ mode: 'continue', taskId: candidate.id })}>继续：{candidate.title}</button>)}
               <button type="button" onMouseDown={event => event.preventDefault()} disabled={busy} onClick={() => void submit({ mode: 'new' })}>作为新任务发送</button>
             </> : <>
-              <span>{busy ? '正在确定任务归属…' : selectedTask ? `继续：${selectedTask.title}` : '结合最近对话自动关联任务'}</span>
+              <span>{busy ? '正在确定任务归属…' : selectedTask ? `继续：${selectedTask.title}` : hasConversationHistory ? '结合最近对话自动关联任务' : '开始新的对话'}</span>
               <button type="button" onMouseDown={event => event.preventDefault()} disabled={busy || uploadingAttachments || !draft.trim()} onClick={() => void submit({ mode: 'new' })}>作为新任务发送</button>
               {routeNotice && <button type="button" onMouseDown={event => event.preventDefault()} data-testid="chat-route-notice" onClick={() => { setSelected(routeNotice.taskId); setView('chat'); }}>{routeNotice.routing === 'continued' ? '已继续' : '已新建'}：{routeNotice.title}</button>}
             </>}
           </div>}
           <div className="composer"><input ref={attachmentInputRef} className="attachment-input" data-testid="attachment-input" type="file" disabled={busy} multiple accept=".txt,.md,.markdown,.csv,.tsv,.json,.yaml,.yml,.xml,.html,.htm,.css,.js,.jsx,.ts,.tsx,.py,.go,.rs,.java,.sql,.sh,.toml,.ini,.log,.c,.h,.cpp,.hpp" onChange={event => void uploadAttachments(event.currentTarget.files)} /><button className="attachment-button" data-testid="attachment-button" type="button" onMouseDown={event => event.preventDefault()} aria-label="添加附件" title="添加附件" disabled={busy || uploadingAttachments || pendingAttachments.length >= 5} onClick={() => attachmentInputRef.current?.click()}><svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg></button><textarea data-testid="task-composer" ref={composerRef} value={draft} disabled={busy} onChange={e => { setDraft(e.target.value); setRouteQuestion(null); }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void submit(); } }} placeholder={view === 'home' ? 'Ask ChatGPT' : 'Type a message'} /><DictationButton draft={draft} setDraft={value => { if (!submissionController.current) setDraft(value); }} onError={setError} textareaRef={composerRef} /><div className="composer-bottom"><label>内核 <select data-testid="engine-select" disabled={busy} value={engine} onChange={e => setEngine(e.target.value as Engine)}>{selectableEngines.map(id => <option key={id} value={id} disabled={state.remoteEngines.includes(id) && !state.availableEngines.includes(id)}>{engineText[id]}{state.availableEngines.includes(id) ? '' : ' · 未配置'}</option>)}</select></label><label className="schedule-toggle"><input type="checkbox" disabled={busy} checked={schedule} onChange={e => setSchedule(e.target.checked)} /> 定期检查</label><button className="voice-call-launch" data-testid="voice-call-launch" type="button" onMouseDown={event => event.preventDefault()} aria-label={`拨打 ${state.profile.name}`} title={`拨打 ${state.profile.name}`} onClick={startDotCall}><svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true"><path d="M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg></button><button className="send" onMouseDown={event => event.preventDefault()} disabled={!stateLoaded || selectedTaskMissing || busy || uploadingAttachments || !draft.trim() || (state.remoteEngines.includes(engine) && !state.availableEngines.includes(engine))} onClick={() => void submit()}>↑</button></div>{schedule && <RecurrenceEditor frequency={frequency} setFrequency={setFrequency} minutes={minutes} setMinutes={setMinutes} time={scheduleTime} setTime={setScheduleTime} timeZone={scheduleTimeZone} setTimeZone={setScheduleTimeZone} weekdays={scheduleWeekdays} setWeekdays={setScheduleWeekdays} endDate={scheduleEndDate} setEndDate={setScheduleEndDate} />}</div><small className="hint" data-testid="composer-hint">{engineAvailabilityHint(state, engine)}</small></div>
-      </section>{view === 'computer' ? <aside className="computer-split" data-testid="computer-split"><header className="computer-pane-header"><div><strong>{state.profile.name} 的电脑</strong><span>点击画面接管 · 点击画面外交还给 {state.profile.name}</span></div><button type="button" aria-label="关闭电脑分栏" title="关闭电脑分栏" onClick={() => void closeComputer()}>×</button></header><ComputerView ref={computerRef} key={authContext.tenant.id} dotName={state.profile.name} localComputerEnabled={state.computerAccess.localComputer} onManageAccess={() => setComputerAccessOpen(true)} onError={setError} /></aside> : view === 'chat' && selectedPageId ? <div className="scratchpad-page-split" data-testid="scratchpad-page-split"><ScratchpadNavigationPane tenantId={authContext.tenant.id} selectedPageId={selectedPageId} refreshKey={pageIndexVersion} onOpen={setSelectedPageId} onBack={() => { setSelectedPageId(null); setView('pages'); }} /><PagePane pageId={selectedPageId} tenantId={authContext.tenant.id} onBack={() => { setSelectedPageId(null); setView('pages'); }} onPageUpdated={() => setPageIndexVersion(version => version + 1)} /></div> : view === 'chat' && (selectedTask || entries.length > 0) && <DotContextPanel profile={state.profile} state={state} tenantId={authContext.tenant.id} onOpenComputer={openComputer} onStartCall={startDotCall} onOpenSlack={() => setSlackModalOpen(true)} onOpenDingTalk={() => setDingtalkModalOpen(true)} onSelectTask={taskId => { setSelected(taskId); setView('chat'); }} />}</div>}
+      </section>{view === 'computer' ? <aside className="computer-split" data-testid="computer-split"><header className="computer-pane-header"><div><strong>{state.profile.name} 的电脑</strong><span>点击画面接管 · 点击画面外交还给 {state.profile.name}</span></div><button type="button" aria-label="关闭电脑分栏" title="关闭电脑分栏" onClick={() => void closeComputer()}>×</button></header><ComputerView ref={computerRef} key={authContext.tenant.id} dotName={state.profile.name} localComputerEnabled={state.computerAccess.localComputer} onManageAccess={() => setComputerAccessOpen(true)} onError={setError} /></aside> : view === 'chat' && selectedPageId ? <div className="scratchpad-page-split" data-testid="scratchpad-page-split"><ScratchpadNavigationPane tenantId={authContext.tenant.id} selectedPageId={selectedPageId} refreshKey={pageIndexVersion} onOpen={setSelectedPageId} onBack={() => { setSelectedPageId(null); setView('pages'); }} /><PagePane pageId={selectedPageId} tenantId={authContext.tenant.id} onBack={() => { setSelectedPageId(null); setView('pages'); }} onPageUpdated={() => setPageIndexVersion(version => version + 1)} /></div> : view === 'chat' && (selectedTask || entries.length > 0) && <DotContextPanel profile={state.profile} state={selected ? state : { ...state, tasks: conversation.tasks }} tenantId={authContext.tenant.id} onOpenComputer={openComputer} onStartCall={startDotCall} onOpenSlack={() => setSlackModalOpen(true)} onOpenDingTalk={() => setDingtalkModalOpen(true)} onSelectTask={taskId => { setSelected(taskId); setView('chat'); }} />}</div>}
       {view === 'pages' && (selectedPageId ? <PagePane pageId={selectedPageId} tenantId={authContext.tenant.id} full onBack={() => setSelectedPageId(null)} onPageUpdated={() => setPageIndexVersion(version => version + 1)} /> : <PagesView tenantId={authContext.tenant.id} onOpen={id => setSelectedPageId(id)} />)}
       {view === 'activity' && <ActivityView tenantId={authContext.tenant.id} profileName={state.profile.name} state={state} stateLoaded={stateLoaded} onSelectTask={taskId => { setSelected(taskId); setView('chat'); }} onOpenPage={openPage} />}
       {view === 'scheduled' && <ScheduledView tasks={state.tasks} watches={state.watches} selectedKey={scheduledKey} onSelect={setScheduledKey} stateLoaded={stateLoaded}
@@ -591,7 +631,7 @@ function App() {
           <button type="button" onClick={() => { setSelectedPageId(null); setView('scheduled'); setMobileNavOpen(false); }}>◴ <span>Scheduled</span></button>
           <button type="button" onClick={() => { openComputer(); setMobileNavOpen(false); }}>▣ <span>电脑</span></button>
         </nav>
-        <div className="mobile-navigation-recent"><strong>最近任务</strong>{state.tasks.slice(0, 12).map(task => <button type="button" key={task.id} className={selected === task.id ? 'selected' : ''} onClick={() => { setSelectedPageId(null); setSelected(task.id); setView('chat'); setMobileNavOpen(false); }}><i className={`status-dot ${task.status}`} />{task.title}</button>)}{state.tasks.length === 0 && <span>还没有任务</span>}</div>
+        <div className="mobile-navigation-recent"><strong>最近任务</strong>{recentTasks.slice(0, 12).map(task => <button type="button" key={task.id} className={selected === task.id ? 'selected' : ''} onClick={() => { setSelectedPageId(null); setSelected(task.id); setView('chat'); setMobileNavOpen(false); }}><i className={`status-dot ${task.status}`} />{task.title}</button>)}{recentTasks.length === 0 && <span>还没有任务</span>}</div>
         <footer>
           <div className="mobile-navigation-account"><strong>{authContext.user.name || authContext.user.email}</strong><small>{authContext.user.email}</small></div>
           <WorkspaceSwitcher auth={authContext} onSwitch={switchTenant} onCreate={createTenant} onError={message => setError(message)} />

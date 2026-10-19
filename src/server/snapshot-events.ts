@@ -9,30 +9,32 @@ interface SnapshotClient {
 interface Connection {
   tokenHash: string;
   incremental: boolean;
-  previous?: { tenantId: string; snapshot: Snapshot };
+  previous?: { scope: string; snapshot: Snapshot };
   blocked: boolean;
   dirty: boolean;
 }
-type Frames = Map<string, { snapshot: Snapshot; full?: string }>;
+type Frames = { tenants: Map<string, Snapshot>; users: Map<string, { snapshot: Snapshot; full?: string }> };
+const emptyFrames = (): Frames => ({ tenants: new Map(), users: new Map() });
 
 export class SnapshotEvents {
   private clients = new Map<SnapshotClient, Connection>();
 
   constructor(
-    private getSession: (tokenHash: string) => { tenant: { id: string } } | null,
+    private getSession: (tokenHash: string) => { tenant: { id: string }; user?: { id: string } } | null,
     private snapshot: (tenantId: string) => Snapshot,
+    private personalize?: (snapshot: Snapshot, tenantId: string, userId?: string) => Snapshot,
   ) {}
 
   connect(client: SnapshotClient, tokenHash: string, incremental = false) {
     const connection: Connection = { tokenHash, incremental, blocked: false, dirty: false };
     this.clients.set(client, connection);
     client.once('close', () => this.clients.delete(client));
-    this.send(client, connection, new Map());
+    this.send(client, connection, emptyFrames());
   }
 
   publish() {
     // Cache only for this publish; every connection must still check its live session.
-    const frames: Frames = new Map();
+    const frames = emptyFrames();
     for (const [client, connection] of this.clients) this.send(client, connection, frames);
   }
 
@@ -59,12 +61,18 @@ export class SnapshotEvents {
     // A false write already accepted the frame. Keep just a dirty flag, then read
     // fresh authorized state on drain instead of queuing obsolete full snapshots.
     if (connection.blocked) { connection.dirty = true; return; }
+    const tenantId = session.tenant.id;
+    const scope = JSON.stringify([tenantId, session.user?.id || '']);
     try {
-      const tenantId = session.tenant.id;
-      let current = frames.get(tenantId);
-      if (!current) { current = { snapshot: this.snapshot(tenantId) }; frames.set(tenantId, current); }
+      let current = frames.users.get(scope);
+      if (!current) {
+        const shared = frames.tenants.get(tenantId) || this.snapshot(tenantId);
+        frames.tenants.set(tenantId, shared);
+        current = { snapshot: this.personalize?.(shared, tenantId, session.user?.id) || shared };
+        frames.users.set(scope, current);
+      }
       let frame: string;
-      if (connection.incremental && connection.previous?.tenantId === tenantId) {
+      if (connection.incremental && connection.previous?.scope === scope) {
         const patch = diffSnapshot(connection.previous.snapshot, current.snapshot);
         if (!patch) return;
         frame = `event: patch\ndata: ${JSON.stringify(patch)}\n\n`;
@@ -73,10 +81,11 @@ export class SnapshotEvents {
         frame = current.full ??= `data: ${JSON.stringify(current.snapshot)}\n\n`;
       }
       this.write(client, connection, frame);
-      if (connection.incremental) connection.previous = { tenantId, snapshot: current.snapshot };
+      if (connection.incremental) connection.previous = { scope, snapshot: current.snapshot };
     } catch {
       // A failed serialization must not poison other connections' cached frame.
-      frames.delete(session.tenant.id);
+      frames.users.delete(scope);
+      frames.tenants.delete(tenantId);
       this.disconnect(client);
     }
   }
@@ -89,7 +98,7 @@ export class SnapshotEvents {
       connection.blocked = false;
       if (!connection.dirty) return;
       connection.dirty = false;
-      this.send(client, connection, new Map());
+      this.send(client, connection, emptyFrames());
     });
   }
 }

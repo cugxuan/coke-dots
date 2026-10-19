@@ -24,6 +24,10 @@ This is bounded recall, not a search over all historical work. Older tasks outsi
 
 ## Continuation and evidence
 
+The root Dot view has a “清除历史” button. It saves an account/workspace-specific history boundary and resets automatic task focus without deleting tasks, messages, calls, attachments or files. The cleared Dot view and its recent/output lists stay empty across reloads; late replies from earlier tasks stay in Activity. Calls started before the boundary stay hidden even if they end later. Opening an old task in Activity preserves its full task context and permits explicit continuation. New user messages after the boundary can make that task visible and eligible for automatic association again. Other workspace members keep their own view.
+
+The boundary and focus revision update atomically, invalidating automatic classification already in flight. History metadata is delivered in account-scoped SSE snapshots/patches; the underlying workspace snapshot is still built once per publish. This is a presentation/context reset, not deletion of stored history or private learned preferences.
+
 The original task ID, title, instruction, workspace, native session and earlier conversation entries remain intact. `tasks.followup_message` records the current incremental request. The Worker executes that request with the previous result, up to six recent messages and up to twenty artifact metadata entries from the existing tenant Worker API. Files remain in the same task directory; Pi reads the required files using its existing tools. No desktop image or protocol change is required.
 
 Historical messages and file metadata are untrusted evidence, not instructions to replay. The prompt explicitly requires using existing reports, preserving files and distinguishing original-source verification, indirect/search evidence, blocked attempts, unqueried sources and unknown coverage. This does not reconstruct a structured source ledger that an older research task never recorded, nor guarantee arbitrary model compliance.

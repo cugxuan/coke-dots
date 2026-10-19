@@ -54,7 +54,7 @@ const slack = new SlackService(store, port);
 const dingtalk = new DingTalkService();
 const computers = new Map<string, ComputerRuntime>();
 const novncStreams = new Map<string, Set<Duplex>>();
-const events = new SnapshotEvents(tokenHash => store.getSession(tokenHash), snapshot);
+const events = new SnapshotEvents(tokenHash => store.getSession(tokenHash), snapshot, personalSnapshot);
 const volcVoiceWss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024, perMessageDeflate: false });
 const configuredDesktopEngines = () => {
   if (!usesCloudComputer()) return [] as Engine[];
@@ -67,6 +67,10 @@ function snapshot(tenantId: string) {
   loadModelSettings(store.getAppSetting('modelBaseUrl'), store.getAppSetting('modelName'), adminTenantId);
   const available = availableFor(tenantId);
   return store.snapshot(available.includes('model'), available, publicModelSettings(adminTenantId), tenantId, configuredDesktopEngines());
+}
+
+function personalSnapshot(state: ReturnType<typeof snapshot>, tenantId: string, userId?: string) {
+  return userId ? { ...state, chatHistory: chatMessages.history(tenantId, userId) } : state;
 }
 
 function computerFor(tenantId: string): ComputerRuntime {
@@ -359,7 +363,12 @@ const server = createServer(async (req, res) => {
       events.connect(res, session.tokenHash, url.searchParams.get('updates') === '1');
       return;
     }
-    if (path === '/api/state' && req.method === 'GET') return reply(res, 200, snapshot(session.tenant.id));
+    if (path === '/api/state' && req.method === 'GET') return reply(res, 200, personalSnapshot(snapshot(session.tenant.id), session.tenant.id, session.user.id));
+    if (path === '/api/chat/history/clear' && req.method === 'POST') {
+      const history = chatMessages.clearHistory(session.tenant.id, session.user.id);
+      publish();
+      return reply(res, 200, history);
+    }
     if (path === '/api/voice-calls' && req.method === 'GET') return reply(res, 200, store.voiceCalls(session.tenant.id, session.user.id));
     if (path === '/api/voice/provider' && req.method === 'GET') return reply(res, 200, voiceProviderInfo());
     if (path === '/api/activity' && req.method === 'GET') {

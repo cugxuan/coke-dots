@@ -45,6 +45,25 @@ test('one publish reads and serializes each tenant once, but checks every live s
   assert.equal(a.frames[1], c.frames[1]); assert.equal(decode(b.frames[1]).profile.name, 'beta');
 });
 
+test('personal history patches stay account-scoped while sharing one tenant snapshot per publish', () => {
+  let cleared = false, reads = 0;
+  const events = new SnapshotEvents(token => ({ tenant: { id: 'shared' }, user: { id: token } }), () => { reads++; return snapshot(); }, (value, _tenant, user) => ({
+    ...value, chatHistory: user === 'alice' && cleared
+      ? { entryId: 10, clearedAt: '2026-10-19T00:00:00.000Z', revision: 1, hiddenTaskIds: ['old'] }
+      : { entryId: 0, clearedAt: null, revision: 0, hiddenTaskIds: [] },
+  }));
+  const alice = new Client(), otherTab = new Client(), bob = new Client();
+  events.connect(alice, 'alice', true); events.connect(otherTab, 'alice', true); events.connect(bob, 'bob', true);
+  reads = 0; cleared = true; events.publish();
+  assert.equal(reads, 1);
+  assert.equal(alice.frames.length, 2); assert.equal(bob.frames.length, 1);
+  assert.equal(alice.frames[1], otherTab.frames[1]);
+  assert.equal(receive(decode(alice.frames[0]), alice.frames[1]).chatHistory?.entryId, 10);
+  assert.equal(decode(bob.frames[0]).chatHistory?.entryId, 0);
+  const reconnect = new Client(); events.connect(reconnect, 'alice', true);
+  assert.equal(decode(reconnect.frames[0]).chatHistory?.revision, 1);
+});
+
 test('opted-in streams send just changed tasks and omit identical updates; legacy streams stay full', () => {
   const a = new Client(), legacy = new Client();
   let value = { ...snapshot(), tasks: [task('active'), task('history', 'private history')] };

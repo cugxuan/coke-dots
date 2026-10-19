@@ -164,6 +164,11 @@ export function initializeStoreSchema(db: DatabaseSync) {
       revision INTEGER NOT NULL, updated_at TEXT NOT NULL,
       PRIMARY KEY(tenant_id,user_id)
     );
+    CREATE TABLE IF NOT EXISTS chat_history (
+      tenant_id TEXT NOT NULL REFERENCES tenants(id), user_id TEXT NOT NULL REFERENCES users(id),
+      entry_id INTEGER NOT NULL, cleared_at TEXT NOT NULL, revision INTEGER NOT NULL,
+      PRIMARY KEY(tenant_id,user_id)
+    );
     CREATE TABLE IF NOT EXISTS chat_message_receipts (
       tenant_id TEXT NOT NULL, user_id TEXT NOT NULL, message_id TEXT NOT NULL,
       payload_hash TEXT NOT NULL, task_id TEXT NOT NULL, routing TEXT NOT NULL,

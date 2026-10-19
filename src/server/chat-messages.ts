@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { isEngine, type ChatMessageResult, type Engine, type Task } from '../shared/types.ts';
+import { isEngine, type ChatHistoryState, type ChatMessageResult, type Engine, type Task } from '../shared/types.ts';
 import { Store } from './store.ts';
 import { classifyTaskMessage, type RoutingCandidate, type RoutingContext, type TaskRoute } from './task-routing.ts';
 
@@ -32,15 +32,50 @@ export function parseChatSubmission(value: unknown): ChatSubmission {
 export class ChatMessages {
   constructor(private store: Store, private classify: Classifier = classifyTaskMessage) {}
 
+  private historyBoundary(tenantId: string, userId: string) {
+    return this.store.db.prepare('SELECT entry_id AS entryId,cleared_at AS clearedAt,revision FROM chat_history WHERE tenant_id=? AND user_id=?')
+      .get(tenantId, userId) as Omit<ChatHistoryState, 'hiddenTaskIds'> | undefined;
+  }
+
+  history(tenantId: string, userId: string): ChatHistoryState {
+    const boundary = this.historyBoundary(tenantId, userId);
+    if (!boundary) return { entryId: 0, clearedAt: null, revision: 0, hiddenTaskIds: [] };
+    // Late background results stay in Activity until a user explicitly resumes the task.
+    const hidden = this.store.db.prepare(`SELECT t.id FROM tasks t WHERE t.tenant_id=? AND t.created_at<=?
+      AND NOT EXISTS (SELECT 1 FROM entries e WHERE e.tenant_id=t.tenant_id AND e.task_id=t.id AND e.kind='user' AND e.id>?)
+      ORDER BY t.id`).all(tenantId, boundary.clearedAt, boundary.entryId) as { id: string }[];
+    return { ...boundary, hiddenTaskIds: hidden.map(task => task.id) };
+  }
+
+  clearHistory(tenantId: string, userId: string): ChatHistoryState {
+    this.store.db.exec('BEGIN IMMEDIATE');
+    try {
+      if (!this.store.isTenantMember(tenantId, userId)) throw new ChatSubmissionError('工作区不可用', 403);
+      const entryId = (this.store.db.prepare('SELECT COALESCE(MAX(id),0) AS id FROM entries WHERE tenant_id=?').get(tenantId) as { id: number }).id;
+      const now = new Date().toISOString();
+      this.store.db.prepare(`INSERT INTO chat_history(tenant_id,user_id,entry_id,cleared_at,revision) VALUES (?,?,?,?,1)
+        ON CONFLICT(tenant_id,user_id) DO UPDATE SET entry_id=excluded.entry_id,cleared_at=excluded.cleared_at,revision=chat_history.revision+1`)
+        .run(tenantId, userId, entryId, now);
+      // Keep the revision monotonic so a classifier already in flight cannot restore old focus.
+      this.store.db.prepare(`INSERT INTO chat_focus(tenant_id,user_id,task_id,revision,updated_at) VALUES (?,?,'',1,?)
+        ON CONFLICT(tenant_id,user_id) DO UPDATE SET task_id='',revision=chat_focus.revision+1,updated_at=excluded.updated_at`)
+        .run(tenantId, userId, now);
+      this.store.db.exec('COMMIT');
+    } catch (error) { this.store.db.exec('ROLLBACK'); throw error; }
+    return this.history(tenantId, userId);
+  }
+
   context(tenantId: string, userId: string): RoutingContext & { revision: number } {
     const focus = this.store.db.prepare('SELECT task_id,revision FROM chat_focus WHERE tenant_id=? AND user_id=?')
       .get(tenantId, userId) as { task_id: string; revision: number } | undefined;
+    const boundary = this.historyBoundary(tenantId, userId);
     // Select IDs before hydrating evidence so older tasks never contribute history to routing.
     const rows = this.store.db.prepare(`WITH recent AS MATERIALIZED (
       SELECT t.id,t.created_at,
         COALESCE((SELECT MAX(e.id) FROM entries e WHERE e.tenant_id=t.tenant_id AND e.task_id=t.id AND e.kind='user'),0) AS lastUserEntryId
       FROM tasks t WHERE t.tenant_id=? AND t.created_by_user_id=? AND t.parent_task_id IS NULL AND t.automation_profile IS NULL
         AND t.schedule_json IS NULL AND t.schedule_minutes IS NULL AND t.status<>'stopped' AND t.engine IN ('model','pi','dsh')
+        AND (? IS NULL OR EXISTS (SELECT 1 FROM entries e WHERE e.tenant_id=t.tenant_id AND e.task_id=t.id AND e.kind='user' AND e.id>?))
       ORDER BY lastUserEntryId DESC,t.created_at DESC,t.id DESC LIMIT 8
     ) SELECT t.id,t.title,t.status,substr(t.instruction,1,500) AS originalRequest,
       substr(COALESCE(t.result,''),1,700) AS summary,
@@ -48,7 +83,7 @@ export class ChatMessages {
       COALESCE((SELECT substr(e.body,1,500) FROM entries e WHERE e.tenant_id=t.tenant_id AND e.task_id=t.id AND e.kind='dot' ORDER BY e.id DESC LIMIT 1),'') AS lastReply,
       recent.lastUserEntryId
       FROM recent JOIN tasks t ON t.id=recent.id
-      ORDER BY recent.lastUserEntryId DESC,recent.created_at DESC,recent.id DESC`).all(tenantId, userId) as unknown as RoutingCandidate[];
+      ORDER BY recent.lastUserEntryId DESC,recent.created_at DESC,recent.id DESC`).all(tenantId, userId, boundary?.clearedAt ?? null, boundary?.entryId ?? 0) as unknown as RoutingCandidate[];
     const focusTaskId = rows.find(row => row.id === focus?.task_id)?.id || rows[0]?.id || null;
     return { focusTaskId, revision: focus?.revision || 0, candidates: rows };
   }

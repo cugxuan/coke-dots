@@ -1,4 +1,5 @@
 import { chatTaskRouting } from './scenarios/task-routing.ts';
+import { clearChatHistory } from './scenarios/chat-history.ts';
 import { pageNavigation } from './scenarios/navigation.ts';
 import { signedOutControls, signInAlpha, supportedEngines, themePreference, firstRunConversation, customizeAppearance, persistAppearance } from './scenarios/onboarding.ts';
 import { authenticatedEventStream, personalIsolation, createSharedWorkspace, inviteMember, revokeInvitations, switchTenant, restoreAfterRestart } from './scenarios/workspaces.ts';
@@ -239,6 +240,10 @@ async function startMockModel() {
         if (prompt.includes('E2E voice long response — summarize actual task result')) {
           decision.status = 'done';
           decision.message = qwenLongVoiceResult;
+        }
+        if (prompt.includes('E2E history clear') || prompt.includes('E2E clean chat')) {
+          decision.status = 'done';
+          decision.message = '历史清除验证任务完成，原文件已保留。';
         }
         const content = JSON.stringify(decision);
         if (response.destroyed || response.writableEnded) return;
@@ -979,6 +984,8 @@ try {
   await recordStep('SeedDuplex keeps a spoken clarification in the same task and speaks the resumed result', () => seedDuplexClarification(scenarioContext));
 
   await recordStep('Page links survive reload, browser history, new tabs, sign-in and tenant changes', () => pageNavigation(scenarioContext));
+
+  await recordStep('Clearing Dot history persists across tabs and reloads while preserving Activity, files and other accounts', () => clearChatHistory(scenarioContext));
 
   assert.deepEqual(pageErrors, [], `Browser runtime errors: ${pageErrors.join('; ')}`);
 } catch (error) {
