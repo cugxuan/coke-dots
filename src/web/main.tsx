@@ -3,6 +3,7 @@ import React, { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState 
 import { createRoot } from 'react-dom/client';
 import { selectableEngines, type AttachmentSummary, type ChatMessageResult, type DotAppearance, type Engine, type Entry, type ScheduleSpec, type Snapshot, type Task, type VoiceCallSession } from '../shared/types.ts';
 import { engineAvailabilityHint } from '../shared/engine-availability.ts';
+import { applySnapshotPatch, type SnapshotPatch } from '../shared/snapshot-patch.ts';
 import { appFetch, request } from './api.ts';
 import './base.css';
 import { ComputerView, type ComputerHandle } from './ComputerView.tsx';
@@ -220,11 +221,17 @@ function App() {
   useEffect(() => {
     if (!authContext) return;
     setStateLoaded(false);
-    const stream = new EventSource(appPath('/api/events'));
-    stream.onmessage = event => {
-      setState(JSON.parse(event.data)); setStateLoaded(true);
+    const stream = new EventSource(appPath('/api/events?updates=1'));
+    let current: Snapshot | null = null;
+    const update = (snapshot: Snapshot) => {
+      current = snapshot;
+      setState(snapshot); setStateLoaded(true);
       setError(current => current === '与本机服务的连接已断开，正在重连。' ? '' : current);
     };
+    stream.onmessage = event => update(JSON.parse(event.data) as Snapshot);
+    stream.addEventListener('patch', event => {
+      if (current) update(applySnapshotPatch(current, JSON.parse(event.data) as SnapshotPatch));
+    });
     stream.onerror = () => {
       setError('与本机服务的连接已断开，正在重连。');
       void appFetch('/api/auth/me').then(response => { if (response.status === 401) setAuthContext(null); }).catch(() => { /* Keep the session while the service restarts; EventSource retries. */ });

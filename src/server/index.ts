@@ -29,7 +29,7 @@ import { WebSocketServer } from 'ws';
 import { bridgeVolcengineVoiceCall } from './volcengine-voice-gateway.ts';
 import { controlPlaneNetwork, isAllowedOrigin, isLocalRequest } from './request-boundary.ts';
 import { usesCloudComputer } from './desktop-runtime-config.ts';
-import { publishSnapshots } from './snapshot-events.ts';
+import { SnapshotEvents } from './snapshot-events.ts';
 
 const envFile = resolve(process.env.DOTS_ENV_FILE || '.env');
 if (existsSync(envFile)) process.loadEnvFile(envFile);
@@ -54,7 +54,7 @@ const slack = new SlackService(store, port);
 const dingtalk = new DingTalkService();
 const computers = new Map<string, ComputerRuntime>();
 const novncStreams = new Map<string, Set<Duplex>>();
-const clients = new Map<ServerResponse, string>();
+const events = new SnapshotEvents(tokenHash => store.getSession(tokenHash), snapshot);
 const volcVoiceWss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024, perMessageDeflate: false });
 const configuredDesktopEngines = () => {
   if (!usesCloudComputer()) return [] as Engine[];
@@ -81,15 +81,10 @@ function computerFor(tenantId: string): ComputerRuntime {
 }
 
 function publish() {
-  publishSnapshots(clients, tokenHash => store.getSession(tokenHash), snapshot);
+  events.publish();
 }
 
-const sessionHeartbeat = setInterval(() => {
-  for (const [client, tokenHash] of clients) {
-    if (!store.getSession(tokenHash)) { client.end(); clients.delete(client); }
-    else client.write(': keep-alive\n\n');
-  }
-}, 30_000);
+const sessionHeartbeat = setInterval(() => events.heartbeat(), 30_000);
 
 const worker = new Worker(store, publish, join(dataDirectory, 'workspaces'), undefined, computerFor, dingtalk);
 const watchRunner = new WatchRunner(store, publish);
@@ -361,9 +356,7 @@ const server = createServer(async (req, res) => {
         'Cache-Control': 'no-store, no-transform', 'X-Accel-Buffering': 'no',
       });
       res.flushHeaders();
-      clients.set(res, session.tokenHash);
-      res.write(`data: ${JSON.stringify(snapshot(session.tenant.id))}\n\n`);
-      req.on('close', () => clients.delete(res));
+      events.connect(res, session.tokenHash, url.searchParams.get('updates') === '1');
       return;
     }
     if (path === '/api/state' && req.method === 'GET') return reply(res, 200, snapshot(session.tenant.id));
@@ -929,8 +922,7 @@ const shutdown = () => {
   dingtalkMonitor.stop();
   dingtalkStream.stop();
   watchRunner.stop();
-  for (const client of clients.keys()) client.end();
-  clients.clear();
+  events.close();
   server.close(() => store.close());
   volcVoiceWss.close();
   for (const computer of computers.values()) void computer.close();
