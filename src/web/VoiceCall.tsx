@@ -56,6 +56,7 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
+  const qwenPlaybackBlockedRef = useRef(true);
   const realtimeSendChannelRef = useRef<RTCDataChannel | null>(null);
   const realtimeEventChannelRef = useRef<RTCDataChannel | null>(null);
   const volcWebSocketRef = useRef<WebSocket | null>(null);
@@ -140,10 +141,16 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
     }, 1000);
     const speechWindow = window as SpeechWindow;
     recognitionConstructorRef.current = speechWindow.SpeechRecognition || speechWindow.webkitSpeechRecognition || null;
-    let qwenResponseActive = false;
+    let speechTurn = 0;
+    const isCurrentTurn = (turn: number) => activeRef.current && !disposed && turn === speechTurn;
+    const qwenResponses = new Map<string, { audio: boolean; turn: number }>();
+    const qwenFinishedResponses = new Set<string>();
+    let qwenRequestedSpeechTurn: number | null = null;
     let qwenPendingInputTurns = 0;
+    const qwenInputTurns = new Map<string, number>();
+    let qwenUnidentifiedInputTurn: number | null = null;
     let qwenModel: string = QWEN_REALTIME_MODEL;
-    const qwenSpeechQueue: string[] = [];
+    const qwenSpeechQueue: { text: string; turn: number }[] = [];
     const processedVoiceTurns = new Set<string>();
     let qwenSessionCreated = false;
     let qwenSessionUpdateSent = false;
@@ -153,10 +160,11 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
     const volcSpeechQueue: string[] = [];
 
     const flushQwenSpeech = () => {
-      if (!activeRef.current || !qwenModelReady || qwenResponseActive || qwenPendingInputTurns > 0) return;
+      if (!activeRef.current || !qwenModelReady || qwenResponses.size > 0 || qwenRequestedSpeechTurn !== null || qwenPendingInputTurns > 0) return;
       if (!speakerRef.current) { qwenSpeechQueue.length = 0; return; }
+      while (qwenSpeechQueue.length && !isCurrentTurn(qwenSpeechQueue[0].turn)) qwenSpeechQueue.shift();
       const next = qwenSpeechQueue[0];
-      if (next && sendQwenText(next)) qwenSpeechQueue.shift();
+      if (next && sendQwenText(next.text, next.turn)) qwenSpeechQueue.shift();
     };
 
     const initializeQwenSession = () => {
@@ -170,27 +178,27 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
       setStatus('正在初始化语音模型…');
     };
 
-    const sendQwenText = (text: string) => {
+    const sendQwenText = (text: string, turn: number) => {
       const channel = realtimeSendChannelRef.current;
       if (!qwenModelReady || !channel || channel.readyState !== 'open') return false;
       channel.send(JSON.stringify({
         type: 'conversation.item.create',
         item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: `结果播报请求：请只自然朗读下方正文，不要读出字段名或添加任何内容。\n正文（JSON 字符串）：${JSON.stringify(text)}` }] },
       }));
-      qwenResponseActive = true;
+      qwenRequestedSpeechTurn = turn;
       channel.send(JSON.stringify({ type: 'response.create', response: { modalities: ['text', 'audio'] } }));
       return true;
     };
-    const queueQwenSpeech = (text: string) => {
-      qwenSpeechQueue.push(text);
+    const queueQwenSpeech = (text: string, turn: number) => {
+      qwenSpeechQueue.push({ text, turn });
       flushQwenSpeech();
     };
 
-    function speak(text: string) {
+    function speak(text: string, turn = speechTurn) {
       const content = text.trim().slice(0, 1200);
-      if (!content || !speakerRef.current) return;
+      if (!content || !speakerRef.current || !isCurrentTurn(turn)) return;
       if (providerRef.current === 'qwen') {
-        queueQwenSpeech(content);
+        queueQwenSpeech(content, turn);
         return;
       }
       if (providerRef.current === 'volcengine') {
@@ -215,9 +223,9 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
       window.speechSynthesis.speak(utterance);
     }
 
-    async function speakTaskResult(text: string, taskId: string) {
-      if (!activeRef.current || !speakerRef.current) return;
-      if (providerRef.current !== 'qwen' || text.trim().length <= VOICE_SUMMARY_THRESHOLD) { speak(text); return; }
+    async function speakTaskResult(text: string, taskId: string, turn: number) {
+      if (!isCurrentTurn(turn) || !speakerRef.current) return;
+      if (providerRef.current !== 'qwen' || text.trim().length <= VOICE_SUMMARY_THRESHOLD) { speak(text, turn); return; }
       const callId = sessionRef.current?.id;
       if (!callId) return;
       const controller = new AbortController();
@@ -229,13 +237,13 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
         if (!response.ok) throw new Error('无法准备语音摘要');
         const speech = await response.json() as { text?: string };
         if (!speech.text?.trim() || speech.text.length > VOICE_SUMMARY_THRESHOLD) throw new Error('语音摘要无效');
-        if (activeRef.current && !controller.signal.aborted) speak(speech.text);
+        if (isCurrentTurn(turn) && !controller.signal.aborted) speak(speech.text, turn);
       } catch {
-        if (activeRef.current && !controller.signal.aborted) speak(VOICE_SUMMARY_FALLBACK);
+        if (isCurrentTurn(turn) && !controller.signal.aborted) speak(VOICE_SUMMARY_FALLBACK, turn);
       } finally { speechPreparationsRef.current.delete(controller); }
     }
 
-    const followTask = (submittedTask: Task) => new Promise<void>((resolve, reject) => {
+    const followTask = (submittedTask: Task, turn: number) => new Promise<void>((resolve, reject) => {
       let stream: EventSource | null = null;
       let fallbackTimer: number | null = null;
       let fallbackBusy = false;
@@ -250,25 +258,26 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
         if (error) reject(error); else resolve();
       };
       const timeout = window.setTimeout(() => {
-        if (activeRef.current) setTaskStatus('仍在后台运行；你可以结束通话。');
+        if (isCurrentTurn(turn)) setTaskStatus('仍在后台运行；你可以结束通话。');
         finish();
       }, 15 * 60 * 1000);
       const reconcile = (snapshot: Snapshot) => {
-        if (!activeRef.current) { finish(); return; }
+        if (settled) return;
+        if (!isCurrentTurn(turn)) { finish(); return; }
         const task = snapshot.tasks.find(candidate => candidate.id === submittedTask.id);
         if (!task) { finish(new Error('找不到刚提交的任务')); return; }
         const latestDotMessage = [...snapshot.entries].reverse().find(entry => entry.taskId === task.id && entry.kind === 'dot')?.body || '';
         if (task.status === 'done') {
           if (waitingTaskIdRef.current === task.id) waitingTaskIdRef.current = null;
           setTaskStatus('已完成：' + task.title);
-          void speakTaskResult(task.result || latestDotMessage || '任务已完成。', task.id);
+          void speakTaskResult(task.result || latestDotMessage || '任务已完成。', task.id, turn);
           finish();
           return;
         }
         if (task.status === 'waiting') {
           waitingTaskIdRef.current = task.id;
           setTaskStatus('等待你的回复');
-          if (latestDotMessage) void speakTaskResult(latestDotMessage, task.id);
+          if (latestDotMessage) void speakTaskResult(latestDotMessage, task.id, turn);
           finish();
           return;
         }
@@ -276,7 +285,7 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
           if (waitingTaskIdRef.current === task.id) waitingTaskIdRef.current = null;
           const message = task.error || (task.status === 'failed' ? '任务执行失败。' : task.status === 'stopped' ? '任务已停止。' : '任务已暂停。');
           setTaskStatus(message);
-          speak(message);
+          speak(message, turn);
           finish();
           return;
         }
@@ -313,7 +322,25 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
       for (const stop of [...taskFollowStopsRef.current]) stop();
     };
 
-    const processTranscript = (rawText: string, sourceTurnId?: string) => {
+    const beginSpeechTurn = () => {
+      speechTurn += 1;
+      // Supersede speech only: submitted tasks keep running and retain their chat results.
+      stopTaskFollowers();
+      for (const controller of speechPreparationsRef.current) controller.abort();
+      speechPreparationsRef.current.clear();
+      qwenSpeechQueue.length = 0;
+      volcSpeechQueue.length = 0;
+      qwenPlaybackBlockedRef.current = true;
+      if (remoteAudioRef.current) remoteAudioRef.current.muted = true;
+      stopVolcPlayback();
+      speechGenerationRef.current += 1;
+      speakingRef.current = false;
+      if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+      setTaskStatus('');
+      return speechTurn;
+    };
+
+    const processTranscript = (rawText: string, sourceTurnId?: string, inputTurn?: number) => {
       const text = rawText.trim().slice(0, 5000);
       if (!text || !activeRef.current) return;
       const callId = sessionRef.current?.id;
@@ -321,29 +348,33 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
       const turnId = sourceTurnId && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(sourceTurnId) ? sourceTurnId : crypto.randomUUID();
       if (processedVoiceTurns.has(turnId)) return;
       processedVoiceTurns.add(turnId);
-      setTranscript(text);
-      setTaskStatus('正在交给 Dot…');
-      const waitingTaskId = waitingTaskIdRef.current;
+      const turn = inputTurn ?? beginSpeechTurn();
+      if (isCurrentTurn(turn)) {
+        setTranscript(text);
+        setTaskStatus('正在交给 Dot…');
+      }
+      const waitingTaskId = isCurrentTurn(turn) ? waitingTaskIdRef.current : null;
       if (waitingTaskId) waitingTaskIdRef.current = null;
       void (async () => {
         let accepted = false;
         try {
           const task = await onTranscriptRef.current(text, waitingTaskId || undefined, callId, turnId);
           accepted = true;
-          if (!activeRef.current) return;
+          if (!isCurrentTurn(turn)) return;
           setTaskStatus(waitingTaskId ? '已回复并继续：' + task.title : '已加入工作队列：' + task.title);
-          if (providerRef.current === 'browser') speak(waitingTaskId ? '收到，我会接着处理。' : '收到，已加入工作队列。');
-          await followTask(task);
+          if (providerRef.current === 'browser') speak(waitingTaskId ? '收到，我会接着处理。' : '收到，已加入工作队列。', turn);
+          await followTask(task, turn);
         } catch (error) {
-          processedVoiceTurns.delete(turnId);
-          if (!accepted && waitingTaskId && !waitingTaskIdRef.current) waitingTaskIdRef.current = waitingTaskId;
-          if (activeRef.current) setTaskStatus(error instanceof Error ? error.message : '任务创建失败');
+          if (!accepted) processedVoiceTurns.delete(turnId);
+          if (!accepted && isCurrentTurn(turn) && waitingTaskId && !waitingTaskIdRef.current) waitingTaskIdRef.current = waitingTaskId;
+          if (isCurrentTurn(turn)) setTaskStatus(error instanceof Error ? error.message : '任务创建失败');
         }
       })();
     };
 
     const handleQwenEvent = (raw: string) => {
-      let event: { type?: string; event_id?: string; item_id?: string; text?: string; stash?: string; transcript?: string; response?: { modalities?: string[] }; error?: { message?: string } };
+      if (!activeRef.current || disposed) return;
+      let event: { type?: string; event_id?: string; item_id?: string; text?: string; stash?: string; transcript?: string; response?: { id?: string; modalities?: string[] }; error?: { message?: string } };
       try { event = JSON.parse(raw) as typeof event; } catch { return; }
       if (event.type === 'session.created') {
         qwenSessionCreated = true;
@@ -368,11 +399,14 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
         return;
       }
       if (event.type === 'conversation.item.input_audio_transcription.delta') {
+        if (event.item_id && qwenInputTurns.has(event.item_id) && !isCurrentTurn(qwenInputTurns.get(event.item_id)!)) return;
         setTranscript(`${event.text || ''}${event.stash || ''}`.trim());
         return;
       }
       if (event.type === 'conversation.item.input_audio_transcription.completed') {
-        if (event.transcript) processTranscript(event.transcript, event.item_id || event.event_id);
+        const turn = (event.item_id ? qwenInputTurns.get(event.item_id) : undefined) ?? qwenUnidentifiedInputTurn ?? undefined;
+        qwenUnidentifiedInputTurn = null;
+        if (event.transcript) processTranscript(event.transcript, event.item_id || event.event_id, turn);
         return;
       }
       if (event.type === 'conversation.item.input_audio_transcription.failed' || event.type === 'error') {
@@ -380,14 +414,39 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
         return;
       }
       if (event.type === 'input_audio_buffer.speech_started') {
+        if (event.item_id && qwenInputTurns.has(event.item_id)) return;
+        const turn = beginSpeechTurn();
+        if (event.item_id) qwenInputTurns.set(event.item_id, turn);
+        else qwenUnidentifiedInputTurn = turn;
         qwenPendingInputTurns += 1;
         setTranscript('');
         return;
       }
-      if (event.type === 'response.created') { qwenResponseActive = true; return; }
+      if (event.type === 'response.created') {
+        const audio = event.response?.modalities?.includes('audio') ?? false;
+        const id = event.response?.id || (audio ? 'audio' : 'text');
+        if (event.response?.id && (qwenFinishedResponses.has(id) || qwenResponses.has(id))) return;
+        const turn = audio ? qwenRequestedSpeechTurn ?? -1 : speechTurn;
+        qwenResponses.set(id, { audio, turn });
+        if (audio) {
+          qwenRequestedSpeechTurn = null;
+          // Server VAD cancels the previous response. Suppress residual RTP audio
+          // until a requested response for the current turn starts, including
+          // when response.created for the interrupted request arrives late.
+          qwenPlaybackBlockedRef.current = !isCurrentTurn(turn);
+          if (remoteAudioRef.current) remoteAudioRef.current.muted = !speakerRef.current || qwenPlaybackBlockedRef.current;
+        }
+        return;
+      }
       if (event.type === 'response.done') {
-        if (!event.response?.modalities?.includes('audio')) qwenPendingInputTurns = Math.max(0, qwenPendingInputTurns - 1);
-        qwenResponseActive = false;
+        const id = event.response?.id || (event.response?.modalities?.includes('audio') ? 'audio' : 'text');
+        if (event.response?.id && qwenFinishedResponses.has(id)) return;
+        const response = qwenResponses.get(id);
+        // Cancellation events may omit modalities. Match by response ID so an
+        // old audio cancellation cannot consume a newer input turn or response.
+        if (!(response?.audio ?? event.response?.modalities?.includes('audio'))) qwenPendingInputTurns = Math.max(0, qwenPendingInputTurns - 1);
+        qwenResponses.delete(id);
+        if (event.response?.id) qwenFinishedResponses.add(id);
         if (qwenSpeechQueue.length === 0 && activeRef.current) setStatus(mutedRef.current ? '麦克风已静音' : '正在聆听');
         flushQwenSpeech();
       }
@@ -419,7 +478,7 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
         const audio = new Audio();
         audio.autoplay = true;
         audio.setAttribute('playsinline', '');
-        audio.muted = !speakerRef.current;
+        audio.muted = !speakerRef.current || qwenPlaybackBlockedRef.current;
         audio.srcObject = event.streams[0] || new MediaStream([event.track]);
         remoteAudioRef.current = audio;
         void audio.play().then(() => setPlaybackNeedsGesture(false)).catch(() => {
@@ -798,7 +857,7 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
     const next = !speakerRef.current;
     speakerRef.current = next;
     setSpeakerOn(next);
-    if (remoteAudioRef.current) remoteAudioRef.current.muted = !next;
+    if (remoteAudioRef.current) remoteAudioRef.current.muted = !next || qwenPlaybackBlockedRef.current;
     if (providerRef.current === 'volcengine' && !next) {
       for (const source of volcOutputSourcesRef.current) { try { source.stop(); } catch { /* Already ended. */ } }
       volcOutputSourcesRef.current.clear();

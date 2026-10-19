@@ -12,7 +12,7 @@ import { desktopVoiceCall } from './scenarios/browser-voice.ts';
 import { mobileVoiceCall } from './scenarios/mobile-voice.ts';
 import { workspaceMemory, privateDotMemory } from './scenarios/memory.ts';
 import { workspaceRules, pageApprovals } from './scenarios/approvals.ts';
-import { qwenWebRtc, qwenLongVoiceResult, qwenLongVoiceSummary } from './scenarios/qwen-voice.ts';
+import { qwenWebRtc, qwenLongVoiceResult, qwenLongVoiceSummary, qwenInterruptionReleases } from './scenarios/qwen-voice.ts';
 import { volcanoRealtime, seedDuplexEntitlement, mobileSeedDuplex, seedDuplexClarification } from './scenarios/volcengine-voice.ts';
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -149,6 +149,14 @@ async function startMockModel() {
         }
         mockModelPrompts.push(prompt);
         mockModelRequests.push({ prompt, authorization: String(request.headers.authorization || '') });
+        const interruptedVoice = prompt.match(/Task: E2E voice interruption ([a-z-]+)/)?.[1];
+        if (interruptedVoice) {
+          if (interruptedVoice === 'late-task') await new Promise<void>(resolve => qwenInterruptionReleases.set(interruptedVoice, resolve));
+          qwenInterruptionReleases.delete(interruptedVoice);
+          response.writeHead(200, { 'content-type': 'application/json' });
+          response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ status: 'done', message: interruptedVoice === 'summary' ? qwenLongVoiceResult : `Voice interruption result: ${interruptedVoice}.` }) } }] }));
+          return;
+        }
         if (prompt.includes('E2E BYD 信用报告') || prompt.includes('Task: 路由新话题：安排读书计划')) {
           response.writeHead(200, { 'content-type': 'application/json' });
           const text = prompt.includes('Task: 帮我列出来具体有哪些信息渠道查询了，哪些没有查询')
@@ -985,6 +993,8 @@ try {
   releaseHeldPauseModel();
   releaseHeldStopModel();
   releaseHeldVoiceModel();
+  for (const release of qwenInterruptionReleases.values()) release();
+  qwenInterruptionReleases.clear();
   releaseParallelModels();
   for (const release of delegatedModelReleases.values()) release();
   if (alphaContext) await alphaContext.tracing.stop({ path: join(artifactRoot, 'alpha-trace.zip') }).catch(() => undefined);

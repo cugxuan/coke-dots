@@ -3,6 +3,7 @@ import type { UiScenarioContext } from '../ui.e2e.ts';
 
 export const qwenLongVoiceResult = '逐条核验记录和资料来源，完整明细保留在聊天中。'.repeat(100) + '\n最终结论：17 条已核实，3 条仍待确认。';
 export const qwenLongVoiceSummary = '17 条记录已核实，3 条仍待确认。完整内容见聊天。';
+export const qwenInterruptionReleases = new Map<string, () => void>();
 
 export async function qwenWebRtc(ctx: UiScenarioContext, model = 'qwen3.8-omni-flash-realtime') {
   ctx.mockQwenSignalingUrl = await ctx.startMockQwenSignaling();
@@ -39,6 +40,16 @@ export async function qwenWebRtc(ctx: UiScenarioContext, model = 'qwen3.8-omni-f
   const rtcMockScript = String.raw`(() => {
       const view = window;
       view.__dotsQwenSentEvents = [];
+      view.__dotsQwenAudioResponses = [];
+      view.__dotsQwenHoldAudioCreated = false;
+      view.__dotsQwenHoldAudioDone = false;
+      class FakeAudio {
+        constructor() { this.muted = false; view.__dotsQwenAudio = this; }
+        setAttribute() {}
+        async play() {}
+        pause() {}
+      }
+      Object.defineProperty(window, 'Audio', { configurable: true, value: FakeAudio });
       const track = { kind: 'audio', enabled: true, stopped: false, stop() { this.stopped = true; } };
       view.__dotsQwenFakeTrack = track;
       view.__dotsQwenFakeSender = null;
@@ -48,8 +59,10 @@ export async function qwenWebRtc(ctx: UiScenarioContext, model = 'qwen3.8-omni-f
           const event = JSON.parse(raw);
           view.__dotsQwenSentEvents.push(event);
           if (event.type === 'response.create') {
-            view.__dotsQwenEventChannel?.emit({ type: 'response.created', response: { modalities: event.response.modalities } });
-            window.setTimeout(() => view.__dotsQwenEventChannel?.emit({ type: 'response.done', response: { modalities: event.response.modalities } }), 60);
+            const response = { id: 'audio-' + view.__dotsQwenAudioResponses.length, modalities: event.response.modalities };
+            view.__dotsQwenAudioResponses.push(response);
+            if (!view.__dotsQwenHoldAudioCreated) view.__dotsQwenEventChannel?.emit({ type: 'response.created', response });
+            if (!view.__dotsQwenHoldAudioDone) window.setTimeout(() => view.__dotsQwenEventChannel?.emit({ type: 'response.done', response }), 60);
           }
         }
         emit(event) { this.onmessage?.({ data: JSON.stringify(event) }); }
@@ -72,6 +85,7 @@ export async function qwenWebRtc(ctx: UiScenarioContext, model = 'qwen3.8-omni-f
           remote.readyState = 'open';
           view.__dotsQwenEventChannel = remote;
           this.ondatachannel?.({ channel: remote });
+          this.ontrack?.({ streams: [{}] });
           remote.emit({ type: 'session.created' });
           this.sendChannel.readyState = 'open';
           this.sendChannel.onopen?.();
@@ -181,6 +195,7 @@ export async function qwenWebRtc(ctx: UiScenarioContext, model = 'qwen3.8-omni-f
   });
   assert.equal(longResult, qwenLongVoiceResult, 'The full result must remain in chat data while only the summary is spoken');
   assert.equal(await ctx.alphaPage!.evaluate(() => (window as unknown as { __dotsQwenSentEvents: { type: string }[] }).__dotsQwenSentEvents.filter(event => event.type === 'response.create').length), 2);
+  await qwenInterruption(ctx, model);
   await ctx.screenshot(ctx.alphaPage!, 'qwen-realtime-call-agent-result');
   await call.getByRole('button', { name: '结束通话' }).click();
   assert.equal(await ctx.alphaPage!.evaluate(() => (window as unknown as { __dotsQwenFakeTrack: { stopped: boolean } }).__dotsQwenFakeTrack.stopped), true, 'Ending the call must stop the microphone track');
@@ -202,4 +217,157 @@ export async function qwenWebRtc(ctx: UiScenarioContext, model = 'qwen3.8-omni-f
   assert(failedCallHistory[0]?.endedAt, 'A Qwen call that fails during microphone startup must not remain active in call history');
   await failedCall.getByRole('button', { name: '结束通话' }).click();
   await failedCall.waitFor({ state: 'detached' });
+}
+
+interface QwenInterruptionWindow extends Window {
+  __dotsQwenEventChannel: { emit(event: unknown): void };
+  __dotsQwenSentEvents: { type: string; item?: { content?: { text?: string }[] } }[];
+  __dotsQwenAudioResponses: { id: string; modalities: string[] }[];
+  __dotsQwenAudio: { muted: boolean };
+  __dotsQwenHoldAudioCreated: boolean;
+  __dotsQwenHoldAudioDone: boolean;
+}
+
+async function qwenInterruption(ctx: UiScenarioContext, model: string) {
+  const page = ctx.alphaPage!;
+  const call = page.getByTestId('voice-call');
+  const instruction = (name: string) => `E2E voice interruption ${name} ${model}`;
+  const emit = (events: unknown[]) => page.evaluate(events => {
+    for (const event of events) (window as unknown as QwenInterruptionWindow).__dotsQwenEventChannel.emit(event);
+  }, events);
+  const start = (name: string) => emit([{ type: 'input_audio_buffer.speech_started', item_id: name }]);
+  const complete = (name: string, finishResponse = true) => emit([
+    { type: 'conversation.item.input_audio_transcription.completed', item_id: name, transcript: instruction(name) },
+    { type: 'response.created', response: { id: `text-${name}`, modalities: ['text'] } },
+    ...(finishResponse ? [{ type: 'response.done', response: { id: `text-${name}`, modalities: ['text'] } }] : []),
+  ]);
+  const input = async (name: string, finishResponse = true) => { await start(name); await complete(name, finishResponse); };
+  const waitDone = async (name: string) => {
+    await page.waitForFunction(async instruction => {
+      const state = await fetch('/api/state').then(response => response.json());
+      return state.tasks.some((task: { instruction: string; status: string }) => task.instruction === instruction && task.status === 'done');
+    }, instruction(name));
+    await page.locator('.timeline .message.dot').filter({ hasText: `Voice interruption result: ${name}.` }).last().waitFor({ state: 'visible' });
+  };
+  const spoken = () => page.evaluate(() => (window as unknown as QwenInterruptionWindow).__dotsQwenSentEvents.filter(event => event.type === 'response.create').length);
+  const waitSpoken = (count: number) => page.waitForFunction(count => (window as unknown as QwenInterruptionWindow).__dotsQwenSentEvents.filter(event => event.type === 'response.create').length === count, count);
+  let count = await spoken();
+
+  // A completed result queued behind the automatic text response is obsolete
+  // as soon as the user starts speaking, before the next transcript arrives.
+  await input('queued', false);
+  await waitDone('queued');
+  await start('after-queue');
+  await start('after-queue'); // Duplicate VAD delivery cannot leave a phantom pending turn.
+  await emit([{ type: 'response.done', response: { id: 'text-queued', modalities: ['text'] } }]);
+  assert.equal(await spoken(), count, 'An interrupted queued result must never be submitted for speech');
+  await complete('after-queue');
+  await waitSpoken(++count);
+
+  // A real accepted Agent job completes later. It must still persist and render
+  // in chat, without speaking or overwriting the foreground call status.
+  await input('late-task');
+  await ctx.waitFor(() => qwenInterruptionReleases.has('late-task'), 10_000);
+  await start('after-task');
+  qwenInterruptionReleases.get('late-task')!();
+  await waitDone('late-task');
+  assert.equal(await spoken(), count, 'A superseded job must finish silently');
+  assert.equal(await page.getByTestId('voice-call-transcript').getAttribute('data-task-status'), '', 'A background completion must not replace the listening status');
+  await complete('after-task');
+  await waitSpoken(++count);
+
+  // The task creation response itself can arrive after interruption.
+  let releaseAcceptance = () => {};
+  const acceptanceGate = new Promise<void>(resolve => { releaseAcceptance = resolve; });
+  let acceptanceHeld = false;
+  let acceptanceReleased = false;
+  const turnRoute = '**/api/voice-calls/*/turns';
+  await page.route(turnRoute, async route => {
+    if (route.request().postDataJSON().turnId !== 'late-acceptance') { await route.continue(); return; }
+    const response = await route.fetch();
+    acceptanceHeld = true;
+    await acceptanceGate;
+    await route.fulfill({ response });
+    acceptanceReleased = true;
+  });
+  try {
+    await input('late-acceptance');
+    await ctx.waitFor(() => acceptanceHeld, 10_000);
+    await start('after-acceptance');
+    releaseAcceptance();
+    await ctx.waitFor(() => acceptanceReleased, 10_000);
+    await waitDone('late-acceptance');
+    await complete('after-acceptance');
+    await waitSpoken(++count);
+    assert.equal(await spoken(), count, 'Late task acceptance must not reattach an obsolete speech follower');
+  } finally { releaseAcceptance(); await page.unroute(turnRoute); }
+
+  // The summary is already being prepared when the user interrupts. Even an
+  // eventual successful response must produce neither speech nor fallback text.
+  let releaseSummary = () => {};
+  const summaryGate = new Promise<void>(resolve => { releaseSummary = resolve; });
+  let summaryHeld = false;
+  let summaryReleased = false;
+  const speechRoute = '**/api/voice-calls/*/speech';
+  await page.route(speechRoute, async route => {
+    const response = await route.fetch();
+    summaryHeld = true;
+    await summaryGate;
+    try { await route.fulfill({ response }); } catch { /* The app aborted this obsolete fetch. */ }
+    summaryReleased = true;
+  });
+  try {
+    await input('summary');
+    await ctx.waitFor(() => summaryHeld, 10_000);
+    await start('after-summary');
+    releaseSummary();
+    await ctx.waitFor(() => summaryReleased, 10_000);
+    await complete('after-summary');
+    await waitSpoken(++count);
+    assert.equal(await spoken(), count, 'An interrupted summary cannot speak, including its failure fallback');
+  } finally { releaseSummary(); await page.unroute(speechRoute); }
+
+  // Keep audio active, then deliver the previous cancellation after a new text
+  // response has started. Real cancellation events can omit modalities.
+  await page.evaluate(() => { (window as unknown as QwenInterruptionWindow).__dotsQwenHoldAudioDone = true; });
+  await input('playing');
+  await waitSpoken(++count);
+  assert.equal(await page.evaluate(() => (window as unknown as QwenInterruptionWindow).__dotsQwenAudio.muted), false);
+  const playing = await page.evaluate(() => (window as unknown as QwenInterruptionWindow).__dotsQwenAudioResponses.at(-1)!);
+  await start('after-playing');
+  assert.equal(await page.evaluate(() => (window as unknown as QwenInterruptionWindow).__dotsQwenAudio.muted), true, 'Speech start must mute residual WebRTC audio immediately');
+  await call.getByRole('button', { name: '关闭扬声器' }).click();
+  await call.getByRole('button', { name: '打开扬声器' }).click();
+  assert.equal(await page.evaluate(() => (window as unknown as QwenInterruptionWindow).__dotsQwenAudio.muted), true, 'Toggling the speaker must not resurrect interrupted audio');
+  await complete('after-playing', false);
+  const cancellation = { type: 'response.done', response: { id: playing.id, status: 'cancelled' } };
+  await emit([cancellation, cancellation]);
+  await waitDone('after-playing');
+  assert.equal(await spoken(), count, 'Old audio cancellation must not consume the current pending text response');
+  await emit([{ type: 'response.done', response: { id: 'text-after-playing', modalities: ['text'] } }]);
+  await waitSpoken(++count);
+  assert.equal(await page.evaluate(() => (window as unknown as QwenInterruptionWindow).__dotsQwenAudio.muted), false, 'Only fresh task speech may reopen the audio output');
+  await emit([cancellation]);
+  const freshPlaying = await page.evaluate(() => (window as unknown as QwenInterruptionWindow).__dotsQwenAudioResponses.at(-1)!);
+  await emit([{ type: 'response.done', response: freshPlaying }]);
+
+  // Interruption may even beat response.created for a speech request.
+  await page.evaluate(() => { (window as unknown as QwenInterruptionWindow).__dotsQwenHoldAudioCreated = true; });
+  await input('late-created');
+  await waitSpoken(++count);
+  const late = await page.evaluate(() => (window as unknown as QwenInterruptionWindow).__dotsQwenAudioResponses.at(-1)!);
+  await start('after-created');
+  await emit([{ type: 'response.created', response: late }]);
+  assert.equal(await page.evaluate(() => (window as unknown as QwenInterruptionWindow).__dotsQwenAudio.muted), true, 'Late response.created must not unmute superseded audio');
+  await emit([{ type: 'response.done', response: { id: late.id, status: 'cancelled' } }]);
+  await page.evaluate(() => {
+    const view = window as unknown as QwenInterruptionWindow;
+    view.__dotsQwenHoldAudioCreated = false;
+    view.__dotsQwenHoldAudioDone = false;
+  });
+  await complete('after-created');
+  await waitSpoken(++count);
+  const texts = await page.evaluate(() => (window as unknown as QwenInterruptionWindow).__dotsQwenSentEvents.flatMap(event => event.item?.content?.map(part => part.text || '') || []));
+  for (const obsolete of ['queued', 'late-task', 'late-acceptance']) assert(!texts.some(text => text.includes(`Voice interruption result: ${obsolete}.`)), `Obsolete ${obsolete} result must never enter the provider conversation`);
+  assert.equal(texts.filter(text => text.includes(qwenLongVoiceSummary)).length, 1, 'Only the original uninterrupted long result should have been summarized aloud');
 }
