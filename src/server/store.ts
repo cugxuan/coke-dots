@@ -514,14 +514,43 @@ export class Store {
     return (task.status === 'done' ? task.result || latest?.body : latest?.body)?.trim() || null;
   }
 
+  voiceCallTask(tenantId: string, userId: string, callId: string, taskId: string): Task | null {
+    const linked = this.db.prepare('SELECT 1 FROM voice_call_turns WHERE tenant_id=? AND user_id=? AND call_id=? AND task_id=?')
+      .get(tenantId, userId, callId, taskId);
+    return linked ? this.getTask(taskId, tenantId) : null;
+  }
+
+  recordVoiceMessage(tenantId: string, userId: string, callId: string, itemId: string, role: 'user' | 'assistant', text: string): { duplicate: boolean } {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(itemId)) throw new Error('语音消息 ID 无效');
+    if (!['user', 'assistant'].includes(role) || !text.trim() || text.length > 12000) throw new Error('语音消息无效');
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const call = this.getVoiceCall(tenantId, userId, callId);
+      if (!call) throw new Error('语音通话不存在');
+      const existing = this.db.prepare('SELECT 1 FROM voice_call_messages WHERE call_id=? AND item_id=? AND role=? AND tenant_id=? AND user_id=?')
+        .get(callId, itemId, role, tenantId, userId);
+      if (!existing) {
+        if (call.endedAt) throw new Error('语音通话已结束');
+        const turn = role === 'user' ? this.db.prepare('SELECT task_id FROM voice_call_turns WHERE call_id=? AND source_message_id=? AND tenant_id=? AND user_id=?')
+          .get(callId, itemId, tenantId, userId) as { task_id: string } | undefined : undefined;
+        const entry = this.addEntry(role === 'user' ? 'user' : 'dot', text.trim(), turn?.task_id || null, tenantId);
+        this.db.prepare('INSERT INTO voice_call_messages(call_id,item_id,tenant_id,user_id,role,entry_id) VALUES (?,?,?,?,?,?)')
+          .run(callId, itemId, tenantId, userId, role, entry.id);
+      }
+      this.db.exec('COMMIT');
+      return { duplicate: Boolean(existing) };
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+  }
+
   submitVoiceTurn(input: {
     tenantId: string; userId: string; callId: string; turnId: string; transcript: string;
-    engine: Engine; waitingTaskId?: string;
+    engine: Engine; waitingTaskId?: string; sourceMessageId?: string;
   }): { task: Task; duplicate: boolean } {
     const transcript = input.transcript.trim();
     if (!transcript || transcript.length > 5000) throw new Error('语音内容需为 1–5000 个字符');
     if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(input.turnId)) throw new Error('语音轮次 ID 无效');
     if (!isEngine(input.engine)) throw new Error('任务内核无效');
+    if (input.sourceMessageId !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(input.sourceMessageId)) throw new Error('语音消息 ID 无效');
 
     this.db.exec('BEGIN IMMEDIATE');
     try {
@@ -542,13 +571,14 @@ export class Store {
       const now = new Date().toISOString();
       let task: Task | null;
       if (input.waitingTaskId) {
+        if (input.sourceMessageId && !this.voiceCallTask(input.tenantId, input.userId, input.callId, input.waitingTaskId)) throw new Error('本次通话没有该任务');
         const old = this.getTask(input.waitingTaskId, input.tenantId);
         if (!old) throw new Error('等待回复的任务不存在');
         if (old.status !== 'waiting') throw new Error('任务当前没有等待回复');
         const instruction = `${old.instruction}\n\nUser reply: ${transcript}`;
         this.db.prepare("UPDATE tasks SET instruction=?,followup_message=?,status='queued',next_run_at=?,error=NULL,updated_at=? WHERE tenant_id=? AND id=? AND status='waiting'")
           .run(old.followupMessage ? old.instruction : instruction, old.followupMessage ? transcript : null, now, now, input.tenantId, old.id);
-        this.db.prepare('INSERT INTO entries(tenant_id,task_id,kind,body,created_at) VALUES (?,?,?,?,?)')
+        if (!input.sourceMessageId) this.db.prepare('INSERT INTO entries(tenant_id,task_id,kind,body,created_at) VALUES (?,?,?,?,?)')
           .run(input.tenantId, old.id, 'user', transcript, now);
         task = this.getTask(old.id, input.tenantId);
       } else {
@@ -556,15 +586,18 @@ export class Store {
         const title = transcript.split(/[.!?。！？\n]/)[0].slice(0, 64) || '新任务';
         this.db.prepare('INSERT INTO tasks (id,tenant_id,title,instruction,status,priority,next_run_at,schedule_minutes,result,error,created_at,updated_at,engine,agent_session_id,schedule_json,parent_task_id,created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
           .run(id, input.tenantId, title, transcript, 'queued', 0, now, null, null, null, now, now, input.engine, null, null, null, input.userId);
-        this.db.prepare('INSERT INTO entries(tenant_id,task_id,kind,body,created_at,attachment_ids_json) VALUES (?,?,?,?,?,?)')
+        if (!input.sourceMessageId) this.db.prepare('INSERT INTO entries(tenant_id,task_id,kind,body,created_at,attachment_ids_json) VALUES (?,?,?,?,?,?)')
           .run(input.tenantId, id, 'user', transcript, now, '[]');
         this.db.prepare('INSERT INTO entries(tenant_id,task_id,kind,body,created_at,attachment_ids_json) VALUES (?,?,?,?,?,?)')
           .run(input.tenantId, id, 'system', '已加入工作队列。', now, '[]');
         task = this.getTask(id, input.tenantId);
       }
       if (!task) throw new Error('无法保存语音任务');
-      this.db.prepare('INSERT INTO voice_call_turns(call_id,turn_id,tenant_id,user_id,task_id,created_at) VALUES (?,?,?,?,?,?)')
-        .run(input.callId, input.turnId, input.tenantId, input.userId, task.id, now);
+      this.db.prepare('INSERT INTO voice_call_turns(call_id,turn_id,tenant_id,user_id,task_id,created_at,source_message_id) VALUES (?,?,?,?,?,?,?)')
+        .run(input.callId, input.turnId, input.tenantId, input.userId, task.id, now, input.sourceMessageId ?? null);
+      if (input.sourceMessageId) this.db.prepare(`UPDATE entries SET task_id=? WHERE id IN
+        (SELECT entry_id FROM voice_call_messages WHERE call_id=? AND item_id=? AND role='user' AND tenant_id=? AND user_id=?)`)
+        .run(task.id, input.callId, input.sourceMessageId, input.tenantId, input.userId);
       this.db.exec('COMMIT');
       return { task: this.getTask(task.id, input.tenantId)!, duplicate: false };
     } catch (error) {

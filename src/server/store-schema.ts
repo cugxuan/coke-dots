@@ -84,6 +84,12 @@ export function initializeStoreSchema(db: DatabaseSync) {
         PRIMARY KEY(call_id,turn_id)
       );
       CREATE INDEX IF NOT EXISTS voice_call_turns_owner ON voice_call_turns(tenant_id,user_id,call_id);
+      CREATE TABLE IF NOT EXISTS voice_call_messages (
+        call_id TEXT NOT NULL REFERENCES voice_calls(id), item_id TEXT NOT NULL,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id), user_id TEXT NOT NULL REFERENCES users(id),
+        role TEXT NOT NULL CHECK(role IN ('user','assistant')), entry_id INTEGER NOT NULL REFERENCES entries(id),
+        PRIMARY KEY(call_id,item_id,role)
+      );
       CREATE TABLE IF NOT EXISTS watches (
         id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL DEFAULT 'legacy', url TEXT NOT NULL, interval_minutes INTEGER NOT NULL,
         status TEXT NOT NULL, next_check_at TEXT, last_checked_at TEXT,
@@ -167,6 +173,7 @@ export function initializeStoreSchema(db: DatabaseSync) {
     CREATE INDEX IF NOT EXISTS tasks_chat_owner ON tasks(tenant_id,created_by_user_id,created_at DESC);
   `);
   addColumnIfMissing('voice_calls', 'request_id', 'TEXT');
+  addColumnIfMissing('voice_call_turns', 'source_message_id', 'TEXT');
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS voice_calls_request ON voice_calls(tenant_id,user_id,request_id)');
   addColumnIfMissing('dingtalk_group_selections', 'corp_id', "TEXT NOT NULL DEFAULT ''");
   const monitorColumns = db.prepare('PRAGMA table_info(dingtalk_group_monitors)').all() as { name: string }[];

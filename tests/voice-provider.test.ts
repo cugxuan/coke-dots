@@ -59,12 +59,14 @@ test('Token Plan Audio 3.0 uses its own voice and built-in transcription over se
   assert.equal('input_audio_transcription' in audio, false);
   assert.equal('audio' in audio, false);
   assert.equal(audio.turn_detection.type, 'server_vad');
-  assert.deepEqual(audio.modalities, ['text'], 'VAD must never speak an answer before Dot returns');
+  assert.equal(audio.turn_detection.silence_duration_ms, 2500);
+  assert.deepEqual(audio.modalities, ['text', 'audio']);
+  assert.equal(audio.tools.length, 2);
   const omni = qwenSessionConfig(QWEN_REALTIME_MODEL, 'Dot');
   assert('audio' in omni);
   assert.equal(omni.audio.output.voice, 'Tina');
   assert.equal(omni.input_audio_transcription.model, 'qwen3-asr-flash-realtime');
-  assert.deepEqual(omni.modalities, ['text']);
+  assert.deepEqual(omni.modalities, ['text', 'audio']);
   assert.throws(() => qwenRealtimeConfig({ ...config, DOTS_QWEN_MODEL: 'unknown-model' }), /模型不受支持/);
   assert.equal(voiceProviderInfo({ ...config, DOTS_QWEN_MODEL: 'unknown-model' }).configured, false);
 });

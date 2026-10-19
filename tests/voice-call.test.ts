@@ -5,6 +5,45 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../src/server/store.ts';
 
+test('secretary conversations persist without tasks, link delegated input in either event order, and enforce call ownership', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'coke-dots-secretary-'));
+  try {
+    let store = new Store(directory);
+    const alpha = store.signInGoogle({ subject: 'secretary-alpha', email: 'secretary-alpha@example.test', name: 'Alpha' });
+    const beta = store.signInGoogle({ subject: 'secretary-beta', email: 'secretary-beta@example.test', name: 'Beta' });
+    const call = store.createVoiceCall(alpha.tenant.id, alpha.user.id);
+    const record = (id: string, role: 'user' | 'assistant', text: string) => store.recordVoiceMessage(alpha.tenant.id, alpha.user.id, call.id, id, role, text);
+    record('greeting', 'user', '你好'); record('answer', 'assistant', '你好，有什么需要帮忙？');
+    assert.equal(record('greeting', 'user', '重复').duplicate, true);
+    assert.equal(store.snapshot(false, [], undefined, alpha.tenant.id).tasks.length, 0);
+    assert.throws(() => store.recordVoiceMessage(beta.tenant.id, beta.user.id, call.id, 'greeting', 'user', '你好'), /语音通话不存在/);
+    assert.throws(() => store.recordVoiceMessage(alpha.tenant.id, beta.user.id, call.id, 'greeting', 'user', '你好'), /语音通话不存在/);
+    for (const messageFirst of [true, false]) {
+      const id = `input-${messageFirst}`;
+      if (messageFirst) record(id, 'user', '帮我创建文件');
+      const request = { tenantId: alpha.tenant.id, userId: alpha.user.id, callId: call.id, turnId: id, sourceMessageId: id, transcript: '创建文件，内容为前文约定的文字', engine: 'pi' as const };
+      const { task } = store.submitVoiceTurn(request);
+      if (!messageFirst) record(id, 'user', '帮我创建文件');
+      assert.equal(store.submitVoiceTurn(request).task.id, task.id);
+      const entries = store.snapshot(false, [], undefined, alpha.tenant.id).entries.filter(entry => entry.taskId === task.id && entry.kind === 'user');
+      assert.deepEqual(entries.map(entry => entry.body), ['帮我创建文件']);
+      assert.equal(store.voiceCallTask(alpha.tenant.id, alpha.user.id, call.id, task.id)?.id, task.id);
+      assert.equal(store.voiceCallTask(alpha.tenant.id, beta.user.id, call.id, task.id), null);
+      store.updateTask(task.id, { status: 'waiting' }, alpha.tenant.id);
+      assert.equal(store.submitVoiceTurn({ ...request, turnId: id + '-reply', sourceMessageId: id + '-reply', waitingTaskId: task.id, transcript: '周五' }).task.id, task.id);
+    }
+    const unrelated = store.createTask('其他任务', null, 'pi', alpha.tenant.id);
+    store.updateTask(unrelated.id, { status: 'waiting' }, alpha.tenant.id);
+    assert.throws(() => store.submitVoiceTurn({ tenantId: alpha.tenant.id, userId: alpha.user.id, callId: call.id, turnId: 'invalid', sourceMessageId: 'invalid', waitingTaskId: unrelated.id, transcript: '周五', engine: 'pi' }), /本次通话没有该任务/);
+    store.endVoiceCall(alpha.tenant.id, alpha.user.id, call.id, 10); store.close();
+    store = new Store(directory);
+    assert.equal(record('answer', 'assistant', 'duplicate').duplicate, true);
+    assert.throws(() => record('late', 'assistant', '迟到消息'), /语音通话已结束/);
+    assert.equal(store.snapshot(false, [], undefined, alpha.tenant.id).entries.filter(entry => entry.body === '你好，有什么需要帮忙？').length, 1);
+    store.close();
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
 test('voice call history is durable and scoped to its workspace and owner', () => {
   const directory = mkdtempSync(join(tmpdir(), 'coke-dots-voice-call-'));
   try {

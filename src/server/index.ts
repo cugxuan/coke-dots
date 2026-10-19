@@ -422,10 +422,28 @@ const server = createServer(async (req, res) => {
 
     const realtimeVoiceMatch = path.match(/^\/api\/voice-calls\/([a-f0-9-]+)\/realtime-session$/);
     const voiceTurnMatch = path.match(/^\/api\/voice-calls\/([a-f0-9-]+)\/turns$/);
+    const voiceMessageMatch = path.match(/^\/api\/voice-calls\/([a-f0-9-]+)\/messages$/);
+    const voiceTaskMatch = path.match(/^\/api\/voice-calls\/([a-f0-9-]+)\/tasks\/([a-f0-9-]+)$/);
     const voiceSpeechMatch = path.match(/^\/api\/voice-calls\/([a-f0-9-]+)\/speech$/);
     const body = req.method === 'POST' || req.method === 'PATCH' || req.method === 'PUT'
       ? await readJson(req, realtimeVoiceMatch ? 100_000 : 32_000)
       : {};
+    if (voiceTaskMatch && req.method === 'GET') {
+      const call = store.getVoiceCall(session.tenant.id, session.user.id, voiceTaskMatch[1]);
+      if (!call || call.endedAt) return reply(res, 404, { error: '语音通话不存在或已结束' });
+      const task = store.voiceCallTask(session.tenant.id, session.user.id, call.id, voiceTaskMatch[2]);
+      return task ? reply(res, 200, { task, message: store.voiceCallTaskText(session.tenant.id, session.user.id, call.id, task.id) })
+        : reply(res, 404, { error: '本次通话没有该任务' });
+    }
+    if (voiceMessageMatch && req.method === 'POST') {
+      if (!store.getVoiceCall(session.tenant.id, session.user.id, voiceMessageMatch[1])) return reply(res, 404, { error: '语音通话不存在' });
+      if (typeof body.itemId !== 'string' || typeof body.text !== 'string' || !['user', 'assistant'].includes(String(body.role))) return reply(res, 400, { error: '语音消息无效' });
+      try {
+        const result = store.recordVoiceMessage(session.tenant.id, session.user.id, voiceMessageMatch[1], body.itemId, body.role as 'user' | 'assistant', body.text);
+        if (!result.duplicate) publish();
+        return reply(res, result.duplicate ? 200 : 201, result);
+      } catch (error) { return reply(res, 400, { error: error instanceof Error ? error.message : '语音消息保存失败' }); }
+    }
     if (voiceSpeechMatch && req.method === 'POST') {
       const call = store.getVoiceCall(session.tenant.id, session.user.id, voiceSpeechMatch[1]);
       if (!call || call.endedAt) return reply(res, 404, { error: '语音通话不存在或已结束' });
@@ -470,6 +488,7 @@ const server = createServer(async (req, res) => {
       const transcript = typeof body.transcript === 'string' ? body.transcript : '';
       const waitingTaskId = body.waitingTaskId === undefined || body.waitingTaskId === null ? undefined : body.waitingTaskId;
       const requestedEngine = body.engine || 'model';
+      if (body.sourceMessageId !== undefined && (typeof body.sourceMessageId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(body.sourceMessageId))) return reply(res, 400, { error: '语音消息 ID 无效' });
       if (typeof waitingTaskId !== 'undefined' && (typeof waitingTaskId !== 'string' || !/^[a-f0-9-]{36}$/i.test(waitingTaskId))) {
         return reply(res, 400, { error: '等待回复的任务 ID 无效' });
       }
@@ -480,6 +499,7 @@ const server = createServer(async (req, res) => {
         const result = store.submitVoiceTurn({
           tenantId: session.tenant.id, userId: session.user.id, callId: call.id, turnId,
           transcript, engine: requestedEngine, ...(waitingTaskId ? { waitingTaskId } : {}),
+          ...(typeof body.sourceMessageId === 'string' ? { sourceMessageId: body.sourceMessageId } : {}),
         });
         publish();
         void worker.tick();

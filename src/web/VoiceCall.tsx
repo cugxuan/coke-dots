@@ -7,6 +7,7 @@ import { VOICE_SUMMARY_FALLBACK, VOICE_SUMMARY_THRESHOLD } from '../shared/voice
 import { appFetch, appWebSocketUrl } from './api.ts';
 import { DotAvatar } from './DotAvatar.tsx';
 import { useCallCardPosition } from './useCallCardPosition.ts';
+import { QwenVoiceSession, type QwenVoiceEvent } from './qwen-voice-session.ts';
 import './voice-call.css';
 
 interface RecognitionAlternative { transcript: string }
@@ -32,7 +33,7 @@ export function VoiceCall({ dotName, appearance, snapshot, initialAudioContext, 
   appearance: DotAppearance;
   snapshot: Snapshot;
   initialAudioContext: AudioContext | null;
-  onTranscript: (text: string, waitingTaskId: string | undefined, callId: string, turnId: string) => Promise<Task>;
+  onTranscript: (text: string, waitingTaskId: string | undefined, callId: string, turnId: string, sourceMessageId?: string) => Promise<Task>;
   onClose: () => void;
 }) {
   const [displayMode, setDisplayMode] = useState<'desktop' | 'mobile'>(() => window.matchMedia(MOBILE_CALL_LAYOUT_QUERY).matches ? 'mobile' : 'desktop');
@@ -153,14 +154,10 @@ export function VoiceCall({ dotName, appearance, snapshot, initialAudioContext, 
     recognitionConstructorRef.current = speechWindow.SpeechRecognition || speechWindow.webkitSpeechRecognition || null;
     let speechTurn = 0;
     const isCurrentTurn = (turn: number) => activeRef.current && !disposed && turn === speechTurn;
-    const qwenResponses = new Map<string, { audio: boolean; turn: number }>();
-    const qwenFinishedResponses = new Set<string>();
-    let qwenRequestedSpeechTurn: number | null = null;
-    let qwenPendingInputTurns = 0;
-    const qwenInputTurns = new Map<string, number>();
-    let qwenUnidentifiedInputTurn: number | null = null;
     let qwenModel: string = QWEN_REALTIME_MODEL;
-    const qwenSpeechQueue: { text: string; turn: number }[] = [];
+    let latestQwenTaskId: string | undefined;
+    let latestQwenTaskTurn = -1;
+    let qwenRecordQueue = Promise.resolve();
     const processedVoiceTurns = new Set<string>();
     let qwenSessionCreated = false;
     let qwenSessionUpdateSent = false;
@@ -168,14 +165,6 @@ export function VoiceCall({ dotName, appearance, snapshot, initialAudioContext, 
     let qwenAudioSender: RTCRtpSender | null = null;
     let qwenMicrophoneTrack: MediaStreamTrack | null = null;
     const volcSpeechQueue: string[] = [];
-
-    const flushQwenSpeech = () => {
-      if (!activeRef.current || !qwenModelReady || qwenResponses.size > 0 || qwenRequestedSpeechTurn !== null || qwenPendingInputTurns > 0) return;
-      if (!speakerRef.current) { qwenSpeechQueue.length = 0; return; }
-      while (qwenSpeechQueue.length && !isCurrentTurn(qwenSpeechQueue[0].turn)) qwenSpeechQueue.shift();
-      const next = qwenSpeechQueue[0];
-      if (next && sendQwenText(next.text, next.turn)) qwenSpeechQueue.shift();
-    };
 
     const initializeQwenSession = () => {
       const channel = realtimeSendChannelRef.current;
@@ -188,28 +177,11 @@ export function VoiceCall({ dotName, appearance, snapshot, initialAudioContext, 
       setStatus('正在初始化语音模型…');
     };
 
-    const sendQwenText = (text: string, turn: number) => {
-      const channel = realtimeSendChannelRef.current;
-      if (!qwenModelReady || !channel || channel.readyState !== 'open') return false;
-      channel.send(JSON.stringify({
-        type: 'conversation.item.create',
-        item: { type: 'message', role: 'user', content: [{ type: 'input_text', text: `结果播报请求：请只自然朗读下方正文，不要读出字段名或添加任何内容。\n正文（JSON 字符串）：${JSON.stringify(text)}` }] },
-      }));
-      qwenRequestedSpeechTurn = turn;
-      setStatus('正在准备语音…');
-      channel.send(JSON.stringify({ type: 'response.create', response: { modalities: ['text', 'audio'] } }));
-      return true;
-    };
-    const queueQwenSpeech = (text: string, turn: number) => {
-      qwenSpeechQueue.push({ text, turn });
-      flushQwenSpeech();
-    };
-
     function speak(text: string, turn = speechTurn) {
       const content = text.trim().slice(0, 1200);
       if (!content || !speakerRef.current || !isCurrentTurn(turn)) return;
       if (providerRef.current === 'qwen') {
-        queueQwenSpeech(content, turn);
+        qwenVoice.speak(content, turn);
         return;
       }
       if (providerRef.current === 'volcengine') {
@@ -340,7 +312,6 @@ export function VoiceCall({ dotName, appearance, snapshot, initialAudioContext, 
       stopTaskFollowers();
       for (const controller of speechPreparationsRef.current) controller.abort();
       speechPreparationsRef.current.clear();
-      qwenSpeechQueue.length = 0;
       volcSpeechQueue.length = 0;
       qwenPlaybackBlockedRef.current = true;
       if (remoteAudioRef.current) remoteAudioRef.current.muted = true;
@@ -384,10 +355,65 @@ export function VoiceCall({ dotName, appearance, snapshot, initialAudioContext, 
       })();
     };
 
+    const qwenVoice = new QwenVoiceSession({
+      send: event => {
+        const channel = realtimeSendChannelRef.current;
+        if (activeRef.current && !disposed && channel?.readyState === 'open') channel.send(JSON.stringify(event));
+      },
+      beginTurn: beginSpeechTurn,
+      isCurrent: isCurrentTurn,
+      playback: allowed => {
+        qwenPlaybackBlockedRef.current = !allowed;
+        if (remoteAudioRef.current) remoteAudioRef.current.muted = !speakerRef.current || !allowed;
+      },
+      status: status => {
+        if (activeRef.current && !disposed) setStatus(status === 'speaking' ? '正在播报' : status === 'preparing' ? '正在准备语音…' : mutedRef.current ? '麦克风已静音' : '正在聆听');
+      },
+      transcript: setTranscript,
+      error: setCallError,
+      record: (itemId, role, text) => {
+        const callId = sessionRef.current?.id;
+        if (!callId) return;
+        qwenRecordQueue = qwenRecordQueue.then(() => appFetch(`/api/voice-calls/${callId}/messages`, {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ itemId, role, text: text.slice(0, 12000) }),
+        })).then(response => { if (!response.ok) throw new Error('语音对话记录保存失败'); })
+          .catch(() => { if (activeRef.current) setCallError('语音对话记录保存失败，请检查连接。'); });
+      },
+      tool: async (name, rawArgs, input) => {
+        if (!rawArgs || typeof rawArgs !== 'object' || Array.isArray(rawArgs)) throw new Error('工具参数无效');
+        const args = rawArgs as Record<string, unknown>;
+        if (args.task_id !== undefined && (typeof args.task_id !== 'string' || !/^[a-f0-9-]{36}$/i.test(args.task_id))) throw new Error('任务 ID 无效');
+        const callId = sessionRef.current?.id;
+        if (!callId || !isCurrentTurn(input.turn)) throw new Error('该轮语音已结束');
+        if (name === 'delegate_task') {
+          if (typeof args.instruction !== 'string' || !args.instruction.trim() || args.instruction.length > 5000) throw new Error('任务指令需为 1–5000 个字符');
+          const task = await onTranscriptRef.current(args.instruction, args.task_id as string | undefined, callId, input.id, input.id);
+          if (input.turn >= latestQwenTaskTurn) { latestQwenTaskId = task.id; latestQwenTaskTurn = input.turn; }
+          if (isCurrentTurn(input.turn)) {
+            setTaskStatus('已加入工作队列：' + task.title);
+            // Acceptance is returned immediately; completion arrives independently.
+            void followTask(task, input.turn);
+          }
+          return { task_id: task.id, status: task.status, message: '任务已收到。只有状态为 done 才代表完成，queued 代表正在排队。' };
+        }
+        if (name === 'get_task_status') {
+          const taskId = args.task_id || latestQwenTaskId;
+          if (!taskId) return { message: '本次通话尚未派发任务。' };
+          const response = await appFetch(`/api/voice-calls/${callId}/tasks/${taskId}`);
+          const result = await response.json() as { task?: Task; message?: string; error?: string };
+          if (!response.ok || !result.task) throw new Error(result.error || '无法查询任务');
+          if (isCurrentTurn(input.turn) && ['queued', 'working', 'delegating'].includes(result.task.status)) void followTask(result.task, input.turn);
+          return { task_id: result.task.id, status: result.task.status, title: result.task.title, result: result.message?.slice(0, 12000), error: result.task.error };
+        }
+        throw new Error('不支持的语音工具');
+      },
+    });
+
     const handleQwenEvent = (raw: string) => {
       if (!activeRef.current || disposed) return;
-      let event: { type?: string; event_id?: string; item_id?: string; text?: string; stash?: string; transcript?: string; response?: { id?: string; modalities?: string[] }; error?: { message?: string } };
-      try { event = JSON.parse(raw) as typeof event; } catch { return; }
+      let event: QwenVoiceEvent;
+      try { event = JSON.parse(raw) as QwenVoiceEvent; } catch { return; }
       if (event.type === 'session.created') {
         qwenSessionCreated = true;
         initializeQwenSession();
@@ -395,78 +421,18 @@ export function VoiceCall({ dotName, appearance, snapshot, initialAudioContext, 
       }
       if (event.type === 'session.updated') {
         if (!qwenSessionUpdateSent || qwenModelReady) return;
-        if (!qwenAudioSender || !qwenMicrophoneTrack) {
-          setCallError('Qwen 语音会话已就绪，但麦克风音轨尚未准备好。');
-          return;
-        }
+        if (!qwenAudioSender || !qwenMicrophoneTrack) { setCallError('语音会话已就绪，但麦克风尚未准备好。'); return; }
         void qwenAudioSender.replaceTrack(qwenMicrophoneTrack).then(() => {
-          if (!activeRef.current || disposed) {
-            void qwenAudioSender?.replaceTrack(null);
-            return;
-          }
+          if (!activeRef.current || disposed) { void qwenAudioSender?.replaceTrack(null); return; }
           if (qwenModelReady) return;
           qwenModelReady = true;
+          qwenVoice.setReady();
           setStatus(mutedRef.current ? '麦克风已静音' : '正在聆听');
-          // One explicit greeting, only while the initial turn is still current.
-          // It uses the same interruption rules as every subsequent result.
           if (speechTurn === 0) speak(`你好，我是 ${dotName}，有什么我可以帮你？`, 0);
-          flushQwenSpeech();
         }).catch(() => setCallError('Qwen 实时语音麦克风音轨启动失败'));
         return;
       }
-      if (event.type === 'conversation.item.input_audio_transcription.delta') {
-        if (event.item_id && qwenInputTurns.has(event.item_id) && !isCurrentTurn(qwenInputTurns.get(event.item_id)!)) return;
-        setTranscript(`${event.text || ''}${event.stash || ''}`.trim());
-        return;
-      }
-      if (event.type === 'conversation.item.input_audio_transcription.completed') {
-        const turn = (event.item_id ? qwenInputTurns.get(event.item_id) : undefined) ?? qwenUnidentifiedInputTurn ?? undefined;
-        qwenUnidentifiedInputTurn = null;
-        if (event.transcript) processTranscript(event.transcript, event.item_id || event.event_id, turn);
-        return;
-      }
-      if (event.type === 'conversation.item.input_audio_transcription.failed' || event.type === 'error') {
-        setCallError(event.error?.message || 'Qwen 语音识别失败，请重试。');
-        return;
-      }
-      if (event.type === 'input_audio_buffer.speech_started') {
-        if (event.item_id && qwenInputTurns.has(event.item_id)) return;
-        const turn = beginSpeechTurn();
-        if (event.item_id) qwenInputTurns.set(event.item_id, turn);
-        else qwenUnidentifiedInputTurn = turn;
-        qwenPendingInputTurns += 1;
-        setTranscript('');
-        return;
-      }
-      if (event.type === 'response.created') {
-        const audio = event.response?.modalities?.includes('audio') ?? false;
-        const id = event.response?.id || (audio ? 'audio' : 'text');
-        if (event.response?.id && (qwenFinishedResponses.has(id) || qwenResponses.has(id))) return;
-        const turn = audio ? qwenRequestedSpeechTurn ?? -1 : speechTurn;
-        qwenResponses.set(id, { audio, turn });
-        if (audio) {
-          qwenRequestedSpeechTurn = null;
-          // Server VAD cancels the previous response. Suppress residual RTP audio
-          // until a requested response for the current turn starts, including
-          // when response.created for the interrupted request arrives late.
-          qwenPlaybackBlockedRef.current = !isCurrentTurn(turn);
-          if (remoteAudioRef.current) remoteAudioRef.current.muted = !speakerRef.current || qwenPlaybackBlockedRef.current;
-          if (isCurrentTurn(turn)) setStatus('正在播报');
-        }
-        return;
-      }
-      if (event.type === 'response.done') {
-        const id = event.response?.id || (event.response?.modalities?.includes('audio') ? 'audio' : 'text');
-        if (event.response?.id && qwenFinishedResponses.has(id)) return;
-        const response = qwenResponses.get(id);
-        // Cancellation events may omit modalities. Match by response ID so an
-        // old audio cancellation cannot consume a newer input turn or response.
-        if (!(response?.audio ?? event.response?.modalities?.includes('audio'))) qwenPendingInputTurns = Math.max(0, qwenPendingInputTurns - 1);
-        qwenResponses.delete(id);
-        if (event.response?.id) qwenFinishedResponses.add(id);
-        if (qwenSpeechQueue.length === 0 && activeRef.current) setStatus(mutedRef.current ? '麦克风已静音' : '正在聆听');
-        flushQwenSpeech();
-      }
+      qwenVoice.handle(event);
     };
 
     const startQwenRealtime = async (call: VoiceCallSession) => {
@@ -484,7 +450,6 @@ export function VoiceCall({ dotName, appearance, snapshot, initialAudioContext, 
       sendChannel.onopen = () => {
         if (providerRef.current === 'qwen' && !qwenModelReady) setStatus('正在初始化语音模型…');
         initializeQwenSession();
-        flushQwenSpeech();
       };
       peer.ondatachannel = event => {
         realtimeEventChannelRef.current = event.channel;

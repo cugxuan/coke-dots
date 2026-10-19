@@ -408,8 +408,8 @@ function App() {
     catch (e) { setError(String(e)); }
   }
 
-  async function submitVoiceTranscript(instruction: string, waitingTaskId: string | undefined, callId: string, turnId: string) {
-    return await request(`/voice-calls/${callId}/turns`, 'POST', { transcript: instruction, turnId, waitingTaskId, engine }) as Task;
+  async function submitVoiceTranscript(instruction: string, waitingTaskId: string | undefined, callId: string, turnId: string, sourceMessageId?: string) {
+    return await request(`/voice-calls/${callId}/turns`, 'POST', { transcript: instruction, turnId, waitingTaskId, engine, sourceMessageId }) as Task;
   }
 
   function startDotCall() {
