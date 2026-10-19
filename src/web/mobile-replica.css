@@ -261,11 +261,6 @@
     line-height: 20px;
   }
 
-  .dot-chat-mode:not(.home-mode) .composer textarea:focus {
-    height: 66px;
-    min-height: 66px;
-  }
-
   .dot-chat-mode .composer-bottom {
     flex: none;
     gap: 4px;

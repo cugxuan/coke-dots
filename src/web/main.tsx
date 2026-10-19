@@ -96,6 +96,26 @@ function App() {
   const submissionController = useRef<AbortController | null>(null);
   const submissionIdentity = useRef<{ signature: string; id: string } | null>(null);
 
+  useLayoutEffect(() => {
+    const textarea = composerRef.current;
+    if (!textarea) return;
+    const resize = () => {
+      textarea.style.height = '0px';
+      textarea.style.height = `${textarea.scrollHeight}px`;
+    };
+    resize();
+    // Reflow wrapped drafts when the viewport or adjacent pane changes width.
+    let width = textarea.getBoundingClientRect().width;
+    const observer = new ResizeObserver(() => {
+      const nextWidth = textarea.getBoundingClientRect().width;
+      if (nextWidth === width) return;
+      width = nextWidth;
+      resize();
+    });
+    observer.observe(textarea);
+    return () => observer.disconnect();
+  }, [draft, view, authContext?.tenant.id]);
+
   useEffect(() => {
     setRouteQuestion(null); setRouteNotice(null);
     submissionController.current?.abort(); submissionController.current = null; setBusy(false);
