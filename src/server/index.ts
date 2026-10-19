@@ -360,7 +360,7 @@ const server = createServer(async (req, res) => {
         'Cache-Control': 'no-store, no-transform', 'X-Accel-Buffering': 'no',
       });
       res.flushHeaders();
-      events.connect(res, session.tokenHash, url.searchParams.get('updates') === '1');
+      events.connect(res, session.tokenHash, url.searchParams.get('updates') === '1', url.searchParams.get('bootstrap') === 'chat');
       return;
     }
     if (path === '/api/state' && req.method === 'GET') return reply(res, 200, personalSnapshot(snapshot(session.tenant.id), session.tenant.id, session.user.id));

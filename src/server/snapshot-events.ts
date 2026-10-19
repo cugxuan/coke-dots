@@ -1,5 +1,6 @@
 import type { Snapshot } from '../shared/types.ts';
 import { diffSnapshot } from '../shared/snapshot-patch.ts';
+import { visibleChatHistory } from '../shared/chat-history.ts';
 
 interface SnapshotClient {
   write(frame: string): unknown;
@@ -9,6 +10,7 @@ interface SnapshotClient {
 interface Connection {
   tokenHash: string;
   incremental: boolean;
+  bootstrapChat: boolean;
   previous?: { scope: string; snapshot: Snapshot };
   blocked: boolean;
   dirty: boolean;
@@ -25,8 +27,8 @@ export class SnapshotEvents {
     private personalize?: (snapshot: Snapshot, tenantId: string, userId?: string) => Snapshot,
   ) {}
 
-  connect(client: SnapshotClient, tokenHash: string, incremental = false) {
-    const connection: Connection = { tokenHash, incremental, blocked: false, dirty: false };
+  connect(client: SnapshotClient, tokenHash: string, incremental = false, bootstrapChat = false) {
+    const connection: Connection = { tokenHash, incremental, bootstrapChat, blocked: false, dirty: false };
     this.clients.set(client, connection);
     client.once('close', () => this.clients.delete(client));
     this.send(client, connection, emptyFrames());
@@ -79,6 +81,13 @@ export class SnapshotEvents {
       } else {
         // Initial connections, reconnects and workspace switches always get a full snapshot.
         frame = current.full ??= `data: ${JSON.stringify(current.snapshot)}\n\n`;
+        if (connection.bootstrapChat && current.snapshot.chatHistory?.clearedAt) {
+          // Restore the visible conversation before transferring retained Activity
+          // history. Both events belong to one authorized snapshot and one write,
+          // so backpressure and the subsequent patch baseline remain unchanged.
+          const chat = { ...current.snapshot, ...visibleChatHistory(current.snapshot) };
+          frame = `event: chat-bootstrap\ndata: ${JSON.stringify(chat)}\n\n${frame}`;
+        }
       }
       this.write(client, connection, frame);
       if (connection.incremental) connection.previous = { scope, snapshot: current.snapshot };

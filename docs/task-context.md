@@ -43,3 +43,7 @@ Follow-up prompts respect the installed 20,000-character limit. Less relevant pa
 - A client disconnect before submission aborts routing. The client retains a message ID for retry when the response is lost. Retrying an already committed message does not rerun it.
 
 Regression coverage lives in `tests/task-routing.test.ts` and `tests/e2e/scenarios/task-routing.ts`. It exercises the original follow-up, explicit continuation, new topics, ambiguity, attachments, persistence, concurrency, cancellation, boundaries and preserving the original report. Existing cloud-computer E2E coverage checks the unchanged Agent/Worker transport.
+
+After history is cleared, browsers opt into `bootstrap=chat` on the snapshot stream. The initial `chat-bootstrap` event contains workspace settings and the visible conversation; retained Activity history follows as the full snapshot before ordinary patches. Root chat and computer access can render and accept messages before that full transfer, while task details and Activity keep their loading state until hydration completes. This changes readiness, not retention or total history size. Legacy streams remain unchanged, and bootstrap data is personalized under the same authenticated workspace/user as the full snapshot. Loading call records does not block the conversation.
+
+Clearing history keeps the Dot computer shortcut available. Starting a call switches to the root conversation while retaining an already-open computer pane and its mounted desktop; ending the call does not close the pane.

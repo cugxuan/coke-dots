@@ -183,3 +183,48 @@ test('progress transfer size does not grow with unchanged task history', () => {
   assert(Buffer.byteLength(JSON.stringify(previous)) > 1_000_000);
   assert.deepEqual(applySnapshotPatch(previous, patch), next);
 });
+
+test('cleared chat restores before retained history and still uses the full patch baseline', () => {
+  const old = task('old', 'retained result'.repeat(100_000));
+  let state: Snapshot = { ...snapshot(), tasks: [old, task('new')],
+    entries: [{ id: 1, tenantId: 'alpha', taskId: 'old', kind: 'dot', body: 'hidden', createdAt: 'now' },
+      { id: 2, tenantId: 'alpha', taskId: 'new', kind: 'user', body: 'visible', createdAt: 'now' }],
+    chatHistory: { entryId: 1, clearedAt: 'now', revision: 1, hiddenTaskIds: ['old'] } };
+  const events = new SnapshotEvents(session, () => state);
+  const client = new Client(); client.writable = false;
+  events.connect(client, 'alpha', true, true);
+  const frames = client.frames[0].trim().split('\n\n');
+  assert.equal(frames.length, 2);
+  assert(frames[0].startsWith('event: chat-bootstrap\n'));
+  const bootstrap = decode(frames[0]);
+  assert.deepEqual(bootstrap.tasks.map(t => t.id), ['new']);
+  assert.deepEqual(bootstrap.entries.map(e => e.id), [2]);
+  assert(Buffer.byteLength(frames[0]) < 2000);
+  assert.deepEqual(decode(frames[1]), state);
+  state = { ...state, tasks: [old, { ...state.tasks[1], result: 'done', status: 'done' }] };
+  events.publish(); assert.equal(client.frames.length, 1);
+  client.writable = true; client.emit('drain');
+  assert(client.frames[1].startsWith('event: patch\n'));
+  assert.deepEqual(receive(decode(frames[1]), client.frames[1]), state);
+
+  const legacy = new Client(); events.connect(legacy, 'alpha', true);
+  assert(legacy.frames[0].startsWith('data: '));
+  const uncleared = new SnapshotEvents(session, () => snapshot());
+  const fresh = new Client(); uncleared.connect(fresh, 'alpha', true, true);
+  assert(fresh.frames[0].startsWith('data: '));
+});
+
+test('chat bootstrap is personalized and a changed workspace cannot inherit its old hidden history', () => {
+  let tenant = 'alpha';
+  const events = new SnapshotEvents(user => ({ tenant: { id: tenant }, user: { id: user } }), snapshot,
+    (state, scope, user) => ({ ...state, chatHistory: user === 'alice' && scope === 'alpha'
+      ? { entryId: 10, clearedAt: 'now', revision: 1, hiddenTaskIds: [] }
+      : { entryId: 0, clearedAt: null, revision: 0, hiddenTaskIds: [] } }));
+  const alice = new Client(), bob = new Client();
+  events.connect(alice, 'alice', true, true); events.connect(bob, 'bob', true, true);
+  assert(alice.frames[0].startsWith('event: chat-bootstrap\n'));
+  assert(bob.frames[0].startsWith('data: '));
+  tenant = 'beta'; events.publish();
+  assert(alice.frames[1].startsWith('data: '));
+  assert.equal(decode(alice.frames[1]).chatHistory?.clearedAt, null);
+});
