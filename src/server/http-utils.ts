@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { resolve, join, extname } from 'node:path';
 import { readFile } from 'node:fs/promises';
+import { parseAppRoute } from '../shared/app-route.ts';
 
 export function normalizeBasePath(value: string) {
   const trimmed = value.trim().replace(/^\/+|\/+$/g, '');
@@ -75,7 +76,7 @@ export async function serveStatic(req: IncomingMessage, res: ServerResponse, pat
   if (req.method !== 'GET') return reply(res, 405, { error: 'Method not allowed' });
   if (pathname.includes('..')) return reply(res, 404, { error: 'Not found' });
   const relativePath = pathname === '/' ? '' : pathname.slice(1);
-  const relative = !relativePath || relativePath.endsWith('/') ? `${relativePath}index.html` : relativePath;
+  const relative = parseAppRoute(pathname) ? 'index.html' : !relativePath || relativePath.endsWith('/') ? `${relativePath}index.html` : relativePath;
   const file = join(resolve('./dist'), relative);
   try {
     const bytes = await readFile(file);

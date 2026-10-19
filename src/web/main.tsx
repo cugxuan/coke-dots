@@ -37,6 +37,8 @@ import { RecurrenceEditor } from './RecurrenceEditor.tsx';
 import { TaskControls } from './TaskControls.tsx';
 import { Profile } from './Profile.tsx';
 import { engineText, type AuthContext, type WorkspaceInvitation } from './ui-types.ts';
+import { routeForView } from '../shared/app-route.ts';
+import { useAppRoute } from './useAppRoute.ts';
 
 const initial: Snapshot = { profile: { name: 'Dot', shape: 'circle', color: '#c8cbd5', eyes: 'dot', glasses: 'none', accessory: 'none', character: 'ring', pet: 'moss', avatarSetupCompletedAt: null, onboardingCompletedAt: null, onboardingCompletedName: null }, preferences: { desktopNotifications: false }, computerAccess: { dotComputer: true, localComputer: true, configured: false }, tasks: [], watches: [], entries: [], configured: false, availableEngines: [], remoteEngines: [], modelSettings: { baseUrl: '', model: '', hasKey: false, adminTenantId: null, apiKeyStatus: 'missing' } };
 type Theme = 'light' | 'dark';
@@ -70,9 +72,7 @@ function App() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [slackModalOpen, setSlackModalOpen] = useState(false);
   const [dingtalkModalOpen, setDingtalkModalOpen] = useState(false);
-  const [view, setView] = useState<'home' | 'chat' | 'activity' | 'scheduled' | 'computer' | 'profile' | 'pages'>('home');
-  const [selected, setSelected] = useState<string | null>(null);
-  const [selectedPageId, setSelectedPageId] = useState<string | null>(null);
+  const { view, setView, selected, setSelected, selectedPageId, setSelectedPageId, scheduledKey, setScheduledKey, replaceRoute } = useAppRoute();
   const lastChatLocation = useRef<{ view: 'home' | 'chat'; selected: string | null; selectedPageId: string | null }>({ view: 'home', selected: null, selectedPageId: null });
   const [pageIndexVersion, setPageIndexVersion] = useState(0);
   const [draft, setDraft] = useState('');
@@ -104,6 +104,8 @@ function App() {
     if (view === 'home' || view === 'chat') lastChatLocation.current = { view, selected, selectedPageId };
     if (view === 'computer') lastChatLocation.current = { view: 'chat', selected, selectedPageId: null };
   }, [view, selected, selectedPageId]);
+
+  useEffect(() => { setMobileNavOpen(false); }, [view, selected, selectedPageId, scheduledKey]);
 
   useEffect(() => {
     if (!mobileNavOpen) return;
@@ -210,6 +212,7 @@ function App() {
   }, [authContext?.tenant.id]);
 
   const selectedTask = state.tasks.find(t => t.id === selected) || null;
+  const selectedTaskMissing = stateLoaded && selected !== null && !selectedTask;
   const entries = useMemo(() => selected ? state.entries.filter(e => e.taskId === selected) : state.entries, [state.entries, selected]);
   const taskById = useMemo(() => new Map(state.tasks.map(task => [task.id, task])), [state.tasks]);
   const progressEntry = useMemo(() => {
@@ -290,7 +293,7 @@ function App() {
   }
 
   async function submit(choice?: { mode: 'new' | 'continue'; taskId?: string }) {
-    if (!draft.trim() || busy || uploadingAttachments || submissionController.current) return;
+    if (!draft.trim() || busy || uploadingAttachments || submissionController.current || selectedTaskMissing) return;
     const keepRootDotConversation = selected === null;
     if (state.remoteEngines.includes(engine) && !state.availableEngines.includes(engine)) {
       setError(state.modelSettings.apiKeyStatus === 'unavailable'
@@ -409,7 +412,8 @@ function App() {
       const response = await appFetch('/api/auth/tenant', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ tenantId }) });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
-      setAuthContext(data as AuthContext); setState(initial); setStateLoaded(false); setSelected(null); setSelectedPageId(null); setError('');
+      setAuthContext(data as AuthContext); setState(initial); setStateLoaded(false); replaceRoute(routeForView(view === 'computer' ? 'chat' : view)); setError('');
+      lastChatLocation.current = { view: 'chat', selected: null, selectedPageId: null };
     } catch (e) { setError(String(e)); }
   }
 
@@ -422,7 +426,8 @@ function App() {
     if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
     const refreshed = await appFetch('/api/auth/me');
     if (refreshed.ok) setAuthContext(await refreshed.json() as AuthContext);
-    setState(initial); setStateLoaded(false); setSelected(null); setSelectedPageId(null);
+    setState(initial); setStateLoaded(false); replaceRoute(routeForView(view === 'computer' ? 'chat' : view));
+    lastChatLocation.current = { view: 'chat', selected: null, selectedPageId: null };
   }
 
   async function logout() {
@@ -430,7 +435,10 @@ function App() {
     if (view === 'computer') setView('chat');
     setVoiceCallOpen(false);
     try { await appFetch('/api/auth/logout', { method: 'POST' }); }
-    finally { setAuthContext(null); setState(initial); setPendingAttachments([]); setSelectedPageId(null); }
+    finally {
+      setAuthContext(null); setState(initial); setStateLoaded(false); setPendingAttachments([]); replaceRoute(routeForView('home'));
+      lastChatLocation.current = { view: 'home', selected: null, selectedPageId: null };
+    }
   }
 
   async function acceptInvitation(invitation: WorkspaceInvitation) {
@@ -443,7 +451,8 @@ function App() {
       if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
       setAuthContext(data as AuthContext);
       setInvitations(current => current.filter(item => item.tenantId !== invitation.tenantId));
-      setState(initial); setStateLoaded(false); setSelected(null); setSelectedPageId(null); setView('chat');
+      setState(initial); setStateLoaded(false); replaceRoute(routeForView('chat'));
+      lastChatLocation.current = { view: 'chat', selected: null, selectedPageId: null };
     } catch (e) { setError(String(e)); }
   }
 
@@ -452,7 +461,7 @@ function App() {
 
   const chatView = view === 'chat' || view === 'computer';
   const workSurface = ['activity', 'scheduled', 'pages'].includes(view);
-  const onboardingMode = view === 'chat' && !selectedTask && !hasConversationHistory && voiceCallsLoaded;
+  const onboardingMode = view === 'chat' && !selected && !selectedTask && !hasConversationHistory && voiceCallsLoaded;
   const computerChoiceMode = onboardingMode && !state.computerAccess.configured;
   const contextMode = view === 'computer' || (view === 'chat' && Boolean(selectedTask || hasConversationHistory));
   return <div className={`shell ${theme === 'dark' ? 'dots-dark' : ''} ${view === 'home' ? 'home-mode' : ''} ${chatView ? 'dot-chat-mode' : ''} ${view === 'computer' ? 'computer-open-mode' : ''} ${contextMode ? 'dot-context-mode' : ''} ${contextMode && voiceCallOpen ? 'voice-call-active-mode' : ''} ${onboardingMode ? 'dot-onboarding-mode' : ''} ${computerChoiceMode ? 'dot-computer-choice-mode' : ''} ${view === 'scheduled' ? 'scheduled-mode' : ''} ${view === 'chat' && selectedPageId ? 'page-open-mode' : ''}`} data-testid="app-shell" data-theme={theme} data-tenant-id={authContext.tenant.id} data-state-loaded={stateLoaded}>
@@ -489,7 +498,7 @@ function App() {
       {error && <div className="error-banner" role="alert">{error}<button onClick={() => setError('')}>×</button></div>}
       {computerConnectedToast && <div className="computer-connected-toast" data-testid="computer-connected-toast" role="status"><span className="computer-connected-icon" aria-hidden="true">✓</span><span>The computer is connected to your dot</span><button type="button" aria-label="Dismiss notification" onClick={() => setComputerConnectedToast(false)}>×</button></div>}
       {(view === 'home' || chatView) && <div className="chat-layout"><section className="chat-panel">
-        {!stateLoaded ? <div className="workspace-loading" role="status">正在恢复工作区…</div> : view === 'home' ? <div className="welcome chat-home" data-testid="chat-home"><h1>What's on your mind today?</h1></div> : !voiceCallsLoaded ? <div className="workspace-loading" role="status">正在恢复工作区…</div> : !selectedTask && !hasConversationHistory ? <DotOnboarding profile={state.profile} computerAccess={state.computerAccess} onComputerAccess={saveComputerAccess} onEditSetup={openDotCustomizer} /> : <div className="timeline" ref={timelineRef} onScroll={() => { const timeline = timelineRef.current; if (timeline) timelineAtBottomRef.current = timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight <= 48; }}>
+        {!stateLoaded ? <div className="workspace-loading" role="status">正在恢复工作区…</div> : view === 'home' ? <div className="welcome chat-home" data-testid="chat-home"><h1>What's on your mind today?</h1></div> : !voiceCallsLoaded ? <div className="workspace-loading" role="status">正在恢复工作区…</div> : selectedTaskMissing ? <div className="workspace-loading" role="alert">此任务不存在，或不属于当前工作区。<button type="button" onClick={() => { setSelected(null); setSelectedPageId(null); }}>返回 Dot 对话</button></div> : !selectedTask && !hasConversationHistory ? <DotOnboarding profile={state.profile} computerAccess={state.computerAccess} onComputerAccess={saveComputerAccess} onEditSetup={openDotCustomizer} /> : <div className="timeline" ref={timelineRef} onScroll={() => { const timeline = timelineRef.current; if (timeline) timelineAtBottomRef.current = timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight <= 48; }}>
           {!selectedTask && <div className="timeline-title">最近的对话和进度</div>}
           {timelineItems.map(item => item.source === 'entry'
             ? <Fragment key={item.id}>
@@ -521,11 +530,11 @@ function App() {
               {routeNotice && <button type="button" onMouseDown={event => event.preventDefault()} data-testid="chat-route-notice" onClick={() => { setSelected(routeNotice.taskId); setView('chat'); }}>{routeNotice.routing === 'continued' ? '已继续' : '已新建'}：{routeNotice.title}</button>}
             </>}
           </div>}
-          <div className="composer"><input ref={attachmentInputRef} className="attachment-input" data-testid="attachment-input" type="file" disabled={busy} multiple accept=".txt,.md,.markdown,.csv,.tsv,.json,.yaml,.yml,.xml,.html,.htm,.css,.js,.jsx,.ts,.tsx,.py,.go,.rs,.java,.sql,.sh,.toml,.ini,.log,.c,.h,.cpp,.hpp" onChange={event => void uploadAttachments(event.currentTarget.files)} /><button className="attachment-button" data-testid="attachment-button" type="button" onMouseDown={event => event.preventDefault()} aria-label="添加附件" title="添加附件" disabled={busy || uploadingAttachments || pendingAttachments.length >= 5} onClick={() => attachmentInputRef.current?.click()}><svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg></button><textarea data-testid="task-composer" ref={composerRef} value={draft} disabled={busy} onChange={e => { setDraft(e.target.value); setRouteQuestion(null); }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void submit(); } }} placeholder={view === 'home' ? 'Ask ChatGPT' : 'Type a message'} /><DictationButton draft={draft} setDraft={value => { if (!submissionController.current) setDraft(value); }} onError={setError} textareaRef={composerRef} /><div className="composer-bottom"><label>内核 <select data-testid="engine-select" disabled={busy} value={engine} onChange={e => setEngine(e.target.value as Engine)}>{selectableEngines.map(id => <option key={id} value={id} disabled={state.remoteEngines.includes(id) && !state.availableEngines.includes(id)}>{engineText[id]}{state.availableEngines.includes(id) ? '' : ' · 未配置'}</option>)}</select></label><label className="schedule-toggle"><input type="checkbox" disabled={busy} checked={schedule} onChange={e => setSchedule(e.target.checked)} /> 定期检查</label><button className="voice-call-launch" data-testid="voice-call-launch" type="button" onMouseDown={event => event.preventDefault()} aria-label={`拨打 ${state.profile.name}`} title={`拨打 ${state.profile.name}`} onClick={startDotCall}><svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true"><path d="M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg></button><button className="send" onMouseDown={event => event.preventDefault()} disabled={!stateLoaded || busy || uploadingAttachments || !draft.trim() || (state.remoteEngines.includes(engine) && !state.availableEngines.includes(engine))} onClick={() => void submit()}>↑</button></div>{schedule && <RecurrenceEditor frequency={frequency} setFrequency={setFrequency} minutes={minutes} setMinutes={setMinutes} time={scheduleTime} setTime={setScheduleTime} timeZone={scheduleTimeZone} setTimeZone={setScheduleTimeZone} weekdays={scheduleWeekdays} setWeekdays={setScheduleWeekdays} endDate={scheduleEndDate} setEndDate={setScheduleEndDate} />}</div><small className="hint" data-testid="composer-hint">{engineAvailabilityHint(state, engine)}</small></div>
+          <div className="composer"><input ref={attachmentInputRef} className="attachment-input" data-testid="attachment-input" type="file" disabled={busy} multiple accept=".txt,.md,.markdown,.csv,.tsv,.json,.yaml,.yml,.xml,.html,.htm,.css,.js,.jsx,.ts,.tsx,.py,.go,.rs,.java,.sql,.sh,.toml,.ini,.log,.c,.h,.cpp,.hpp" onChange={event => void uploadAttachments(event.currentTarget.files)} /><button className="attachment-button" data-testid="attachment-button" type="button" onMouseDown={event => event.preventDefault()} aria-label="添加附件" title="添加附件" disabled={busy || uploadingAttachments || pendingAttachments.length >= 5} onClick={() => attachmentInputRef.current?.click()}><svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg></button><textarea data-testid="task-composer" ref={composerRef} value={draft} disabled={busy} onChange={e => { setDraft(e.target.value); setRouteQuestion(null); }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void submit(); } }} placeholder={view === 'home' ? 'Ask ChatGPT' : 'Type a message'} /><DictationButton draft={draft} setDraft={value => { if (!submissionController.current) setDraft(value); }} onError={setError} textareaRef={composerRef} /><div className="composer-bottom"><label>内核 <select data-testid="engine-select" disabled={busy} value={engine} onChange={e => setEngine(e.target.value as Engine)}>{selectableEngines.map(id => <option key={id} value={id} disabled={state.remoteEngines.includes(id) && !state.availableEngines.includes(id)}>{engineText[id]}{state.availableEngines.includes(id) ? '' : ' · 未配置'}</option>)}</select></label><label className="schedule-toggle"><input type="checkbox" disabled={busy} checked={schedule} onChange={e => setSchedule(e.target.checked)} /> 定期检查</label><button className="voice-call-launch" data-testid="voice-call-launch" type="button" onMouseDown={event => event.preventDefault()} aria-label={`拨打 ${state.profile.name}`} title={`拨打 ${state.profile.name}`} onClick={startDotCall}><svg viewBox="0 0 24 24" width="15" height="15" fill="none" aria-hidden="true"><path d="M4 10v4M8 7v10M12 4v16M16 7v10M20 10v4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg></button><button className="send" onMouseDown={event => event.preventDefault()} disabled={!stateLoaded || selectedTaskMissing || busy || uploadingAttachments || !draft.trim() || (state.remoteEngines.includes(engine) && !state.availableEngines.includes(engine))} onClick={() => void submit()}>↑</button></div>{schedule && <RecurrenceEditor frequency={frequency} setFrequency={setFrequency} minutes={minutes} setMinutes={setMinutes} time={scheduleTime} setTime={setScheduleTime} timeZone={scheduleTimeZone} setTimeZone={setScheduleTimeZone} weekdays={scheduleWeekdays} setWeekdays={setScheduleWeekdays} endDate={scheduleEndDate} setEndDate={setScheduleEndDate} />}</div><small className="hint" data-testid="composer-hint">{engineAvailabilityHint(state, engine)}</small></div>
       </section>{view === 'computer' ? <aside className="computer-split" data-testid="computer-split"><header className="computer-pane-header"><div><strong>{state.profile.name} 的电脑</strong><span>点击画面接管 · 点击画面外交还给 {state.profile.name}</span></div><button type="button" aria-label="关闭电脑分栏" title="关闭电脑分栏" onClick={() => void closeComputer()}>×</button></header><ComputerView ref={computerRef} key={authContext.tenant.id} dotName={state.profile.name} localComputerEnabled={state.computerAccess.localComputer} onManageAccess={() => setComputerAccessOpen(true)} onError={setError} /></aside> : view === 'chat' && selectedPageId ? <div className="scratchpad-page-split" data-testid="scratchpad-page-split"><ScratchpadNavigationPane tenantId={authContext.tenant.id} selectedPageId={selectedPageId} refreshKey={pageIndexVersion} onOpen={setSelectedPageId} onBack={() => { setSelectedPageId(null); setView('pages'); }} /><PagePane pageId={selectedPageId} tenantId={authContext.tenant.id} onBack={() => { setSelectedPageId(null); setView('pages'); }} onPageUpdated={() => setPageIndexVersion(version => version + 1)} /></div> : view === 'chat' && (selectedTask || entries.length > 0) && <DotContextPanel profile={state.profile} state={state} tenantId={authContext.tenant.id} onOpenComputer={openComputer} onStartCall={startDotCall} onOpenSlack={() => setSlackModalOpen(true)} onOpenDingTalk={() => setDingtalkModalOpen(true)} onSelectTask={taskId => { setSelected(taskId); setView('chat'); }} />}</div>}
       {view === 'pages' && (selectedPageId ? <PagePane pageId={selectedPageId} tenantId={authContext.tenant.id} full onBack={() => setSelectedPageId(null)} onPageUpdated={() => setPageIndexVersion(version => version + 1)} /> : <PagesView tenantId={authContext.tenant.id} onOpen={id => setSelectedPageId(id)} />)}
       {view === 'activity' && <ActivityView tenantId={authContext.tenant.id} profileName={state.profile.name} state={state} stateLoaded={stateLoaded} onSelectTask={taskId => { setSelected(taskId); setView('chat'); }} onOpenPage={openPage} />}
-      {view === 'scheduled' && <ScheduledView tasks={state.tasks} watches={state.watches}
+      {view === 'scheduled' && <ScheduledView tasks={state.tasks} watches={state.watches} selectedKey={scheduledKey} onSelect={setScheduledKey} stateLoaded={stateLoaded}
         onCancelTask={task => void act(task, 'cancelSchedule')}
         onWatchAction={(watch, action) => void actWatch(watch.id, action)}
         onOpenTask={task => { setSelected(task.id); setView('chat'); }}

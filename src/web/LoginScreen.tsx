@@ -8,6 +8,8 @@ export function LoginScreen({ googleConfigured, localAuthAvailable, e2eAuthAvail
   const [localToken, setLocalToken] = useState('');
   const isElectron = /Electron/i.test(navigator.userAgent);
   const authError = new URLSearchParams(window.location.search).get('authError');
+  const returnTo = `${window.location.pathname}${window.location.search}`;
+  const googleStartPath = `${appPath('/api/auth/google/start')}?${new URLSearchParams({ returnTo })}`;
   const authErrors: Record<string, string> = { cancelled: '你取消了登录。', expired: '登录请求已过期，请重试。', invalid: '登录返回信息无效。', invalid_identity: 'Google 身份验证未通过。', missing_identity: 'Google 没有返回身份令牌。', sign_in_failed: 'Google 登录失败，请检查配置后重试。' };
   async function beginDesktopLogin() {
     setDesktopError(''); setDesktopPending(true);
@@ -15,6 +17,7 @@ export function LoginScreen({ googleConfigured, localAuthAvailable, e2eAuthAvail
     const handoffToken = Array.from(random, byte => byte.toString(16).padStart(2, '0')).join('');
     const authorization = new URL(appPath('/api/auth/desktop/start'), window.location.href);
     authorization.searchParams.set('handoffToken', handoffToken);
+    authorization.searchParams.set('returnTo', returnTo);
     const popup = window.open(authorization.toString(), '_blank');
     if (!popup && !isElectron) { setDesktopPending(false); setDesktopError('浏览器阻止了登录窗口，请允许弹出窗口后重试。'); return; }
     try {
@@ -62,7 +65,7 @@ export function LoginScreen({ googleConfigured, localAuthAvailable, e2eAuthAvail
       <label htmlFor="local-access-token">访问密钥</label>
       <input id="local-access-token" type="password" autoComplete="current-password" required value={localToken} onChange={event => setLocalToken(event.target.value)} />
       <button className="google-login" disabled={desktopPending || !localToken}>{desktopPending ? '正在登录…' : '进入本机工作区'}</button>
-    </form> : googleConfigured ? isElectron ? <button className="google-login" disabled={desktopPending} onClick={() => void beginDesktopLogin()}><span>G</span>{desktopPending ? '等待浏览器完成登录…' : '使用 Google 登录'}</button> : <a className="google-login" href={appPath('/api/auth/google/start')}><span>G</span>使用 Google 登录</a> : <div className="auth-setup"><strong>需要配置 Google OAuth</strong><span>在本机服务环境中设置 GOOGLE_CLIENT_ID 和 GOOGLE_CLIENT_SECRET，然后重启服务。</span></div>}
+    </form> : googleConfigured ? isElectron ? <button className="google-login" disabled={desktopPending} onClick={() => void beginDesktopLogin()}><span>G</span>{desktopPending ? '等待浏览器完成登录…' : '使用 Google 登录'}</button> : <a className="google-login" href={googleStartPath}><span>G</span>使用 Google 登录</a> : <div className="auth-setup"><strong>需要配置 Google OAuth</strong><span>在本机服务环境中设置 GOOGLE_CLIENT_ID 和 GOOGLE_CLIENT_SECRET，然后重启服务。</span></div>}
     {e2eAuthAvailable && <div className="e2e-login"><label htmlFor="e2e-email">E2E 测试账号</label><input id="e2e-email" type="email" value={e2eEmail} onChange={event => setE2eEmail(event.target.value)} /><button data-testid="e2e-sign-in" className="google-login" onClick={() => void signInE2e()}>测试环境登录</button></div>}
     <small>{localAuthAvailable ? '访问密钥由本机部署管理员提供。模型 API 密钥请在登录后的设置中填写。' : '仅申请基本身份信息；Coke Dots 不会取得 Gmail 或 Google Drive 权限。'}</small>
   </div></main>;

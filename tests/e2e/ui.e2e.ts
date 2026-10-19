@@ -1,4 +1,5 @@
 import { chatTaskRouting } from './scenarios/task-routing.ts';
+import { pageNavigation } from './scenarios/navigation.ts';
 import { signedOutControls, signInAlpha, supportedEngines, themePreference, firstRunConversation, customizeAppearance, persistAppearance } from './scenarios/onboarding.ts';
 import { authenticatedEventStream, personalIsolation, createSharedWorkspace, inviteMember, revokeInvitations, switchTenant, restoreAfterRestart } from './scenarios/workspaces.ts';
 import { dictateAndSend } from './scenarios/dictation.ts';
@@ -968,6 +969,8 @@ try {
   await recordStep('Mobile Chrome SeedDuplex call captures microphone audio, speaks the Agent result, and dispatches Chinese speech', () => mobileSeedDuplex(scenarioContext));
 
   await recordStep('SeedDuplex keeps a spoken clarification in the same task and speaks the resumed result', () => seedDuplexClarification(scenarioContext));
+
+  await recordStep('Page links survive reload, browser history, new tabs, sign-in and tenant changes', () => pageNavigation(scenarioContext));
 
   assert.deepEqual(pageErrors, [], `Browser runtime errors: ${pageErrors.join('; ')}`);
 } catch (error) {

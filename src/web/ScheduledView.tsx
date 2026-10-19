@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { Task, Watch } from '../shared/types.ts';
 import { describeSchedule, scheduleForTask } from '../shared/scheduling.ts';
 
@@ -10,9 +10,12 @@ const statusText: Record<Task['status'], string> = {
   queued: 'Queued', working: 'Working', delegating: 'Parallel work', waiting: 'Needs you', scheduled: 'Monitoring', done: 'Complete', failed: 'Failed', paused: 'Paused', stopped: 'Stopped',
 };
 
-export function ScheduledView({ tasks, watches, onCancelTask, onWatchAction, onOpenTask, onNewTask, onAddWatch }: {
+export function ScheduledView({ tasks, watches, selectedKey, onSelect, stateLoaded, onCancelTask, onWatchAction, onOpenTask, onNewTask, onAddWatch }: {
   tasks: Task[];
   watches: Watch[];
+  selectedKey: string | null;
+  onSelect: (key: string) => void;
+  stateLoaded: boolean;
   onCancelTask: (task: Task) => void;
   onWatchAction: (watch: Watch, action: 'pause' | 'resume') => void;
   onOpenTask: (task: Task) => void;
@@ -20,7 +23,6 @@ export function ScheduledView({ tasks, watches, onCancelTask, onWatchAction, onO
   onAddWatch: (url: string, intervalMinutes: number) => Promise<void>;
 }) {
   const [query, setQuery] = useState('');
-  const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [showWatchForm, setShowWatchForm] = useState(false);
   const [watchUrl, setWatchUrl] = useState('');
   const [watchMinutes, setWatchMinutes] = useState(60);
@@ -43,11 +45,7 @@ export function ScheduledView({ tasks, watches, onCancelTask, onWatchAction, onO
     const normalized = query.trim().toLocaleLowerCase();
     return normalized ? items.filter(item => item.searchable.toLocaleLowerCase().includes(normalized)) : items;
   }, [items, query]);
-  const selected = filtered.find(item => item.key === selectedKey) || null;
-
-  useEffect(() => {
-    if (!selected || !filtered.some(item => item.key === selectedKey)) setSelectedKey(filtered[0]?.key || null);
-  }, [filtered, selected, selectedKey]);
+  const selected = selectedKey ? items.find(item => item.key === selectedKey) || null : filtered[0] || null;
 
   async function submitWatch() {
     if (!watchUrl.trim() || watchBusy) return;
@@ -70,7 +68,7 @@ export function ScheduledView({ tasks, watches, onCancelTask, onWatchAction, onO
       <div className="scheduled-items" aria-label="Scheduled tasks">
         {filtered.map(item => {
           const status = item.kind === 'task' ? statusText[item.task.status] : item.watch.status === 'active' ? 'Monitoring' : item.watch.status === 'paused' ? 'Paused' : 'Failed';
-          return <button key={item.key} className={`scheduled-item ${selectedKey === item.key ? 'selected' : ''}`} aria-pressed={selectedKey === item.key} onClick={() => setSelectedKey(item.key)}>
+          return <button key={item.key} className={`scheduled-item ${selected?.key === item.key ? 'selected' : ''}`} aria-pressed={selected?.key === item.key} onClick={() => onSelect(item.key)}>
             <span className="scheduled-item-copy"><strong>{item.title}</strong><small>{status}</small></span>
             <span className="scheduled-item-menu" aria-hidden="true">···</span>
           </button>;
@@ -86,6 +84,7 @@ export function ScheduledView({ tasks, watches, onCancelTask, onWatchAction, onO
     </aside>
 
     <div className="scheduled-detail-pane">
+      {stateLoaded && selectedKey && !selected && <p role="alert">该定时任务不存在，或不属于当前工作区。</p>}
       {showWatchForm && <form className="scheduled-watch-form" onSubmit={event => { event.preventDefault(); void submitWatch(); }}>
         <div className="scheduled-watch-form-heading"><strong>Monitor a page</strong><button type="button" aria-label="Close monitor form" onClick={() => { setShowWatchForm(false); setWatchError(''); }}>×</button></div>
         <label>HTTPS URL<input aria-label="HTTPS URL" type="url" placeholder="https://example.com/page" value={watchUrl} onChange={event => setWatchUrl(event.target.value)} required /></label>

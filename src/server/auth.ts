@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { CodeChallengeMethod, OAuth2Client } from 'google-auth-library';
 import { Store, type AuthSession } from './store.ts';
 import { controlPlaneNetwork, httpsPublicOrigin } from './request-boundary.ts';
+import { appLoginReturnUrl } from '../shared/app-route.ts';
 
 const cookieName = 'coke_dots_session';
 const oauthCookieName = 'coke_dots_oauth_state';
@@ -111,28 +112,33 @@ export class AuthService {
     const state = url.searchParams.get('state') || '';
     const code = url.searchParams.get('code') || '';
     const flow = state && state.length <= 1024 ? this.store.consumeOAuthFlow(hash(state)) : null;
-    const returnTo = flow?.returnTo || appBaseUrl(req);
+    const returnTo = flow?.returnTo || `${appBaseUrl(req)}/`;
+    const returnLocation = (error?: string) => {
+      const target = new URL(returnTo);
+      if (error) target.searchParams.set('authError', error);
+      return target.toString();
+    };
     const cookieState = cookieValue(req.headers.cookie || '', oauthCookieName);
     const redirectUri = this.redirectUri(req);
     clearOAuthCookie(res, redirectUri);
     if (url.searchParams.has('error')) {
       if (flow?.handoffHash) this.store.cancelDesktopHandoff(flow.handoffHash);
-      return redirect(res, `${returnTo}/?authError=cancelled`);
+      return redirect(res, returnLocation('cancelled'));
     }
-    if (!state || !code || code.length > 4096) return redirect(res, `${returnTo}/?authError=invalid`);
+    if (!state || !code || code.length > 4096) return redirect(res, returnLocation('invalid'));
     if (!flow || cookieState !== hash(state)) {
       if (flow?.handoffHash) this.store.cancelDesktopHandoff(flow.handoffHash);
-      return redirect(res, `${returnTo}/?authError=expired`);
+      return redirect(res, returnLocation('expired'));
     }
     try {
       const client = this.oauthClient(redirectUri);
       disableOAuthCodeExchangeRetries(client);
       const { tokens } = await client.getToken({ code, codeVerifier: flow.codeVerifier, redirect_uri: redirectUri });
-      if (!tokens.id_token) return redirect(res, `${returnTo}/?authError=missing_identity`);
+      if (!tokens.id_token) return redirect(res, returnLocation('missing_identity'));
       const ticket = await client.verifyIdToken({ idToken: tokens.id_token, audience: this.clientId });
       const identity = ticket.getPayload();
       if (!identity || identity.nonce !== flow.nonce || !identity.sub || !identity.email || identity.email_verified !== true) {
-        return redirect(res, `${returnTo}/?authError=invalid_identity`);
+        return redirect(res, returnLocation('invalid_identity'));
       }
       const account = this.store.signInGoogle({ subject: identity.sub, email: identity.email, name: identity.name || identity.email });
       const token = randomToken();
@@ -140,11 +146,11 @@ export class AuthService {
       this.store.createSession(hash(token), account.user.id, account.tenant.id, expiresAt);
       if (flow.handoffHash) this.store.completeDesktopHandoff(flow.handoffHash, account.user.id, account.tenant.id);
       setSessionCookie(res, token, sessionLifetimeMs, redirectUri.startsWith('https://'));
-      redirect(res, `${returnTo}/`);
+      redirect(res, returnLocation());
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error('Google sign-in failed:', message.slice(0, 300));
-      redirect(res, `${returnTo}/?authError=sign_in_failed`);
+      redirect(res, returnLocation('sign_in_failed'));
     }
   }
 
@@ -190,7 +196,8 @@ export class AuthService {
     const client = this.oauthClient(redirectUri);
     const { codeVerifier, codeChallenge } = await client.generateCodeVerifierAsync();
     const expiresAt = new Date(Date.now() + 10 * 60_000).toISOString();
-    this.store.createOAuthFlow({ stateHash: hash(state), nonce, codeVerifier, expiresAt, handoffHash, returnTo: appBaseUrl(req) });
+    const requestedReturn = new URL(req.url || '/', 'http://localhost').searchParams.get('returnTo');
+    this.store.createOAuthFlow({ stateHash: hash(state), nonce, codeVerifier, expiresAt, handoffHash, returnTo: appLoginReturnUrl(appBaseUrl(req), requestedReturn) });
     setOAuthCookie(res, hash(state), redirectUri);
     const authorizationUrl = new URL(client.generateAuthUrl({
       response_type: 'code', access_type: 'online', scope: ['openid', 'email', 'profile'],
@@ -266,7 +273,7 @@ function appBaseUrl(req: IncomingMessage) {
     try {
       const url = new URL(referer);
       if (/^http:\/\/(127\.0\.0\.1|localhost):(5173|4317)$/.test(url.origin)) {
-        const mountPath = process.env.DOTS_BASE_PATH?.trim() ? normalizeBasePath(process.env.DOTS_BASE_PATH) : normalizeBasePath(url.pathname);
+        const mountPath = normalizeBasePath(process.env.DOTS_BASE_PATH || '');
         return `${url.origin}${mountPath}`;
       }
     } catch { /* Ignore malformed referrers. */ }

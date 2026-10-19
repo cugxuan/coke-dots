@@ -159,7 +159,8 @@ export async function mobileSeedDuplex(ctx: UiScenarioContext) {
       } } });
     })()`);
   assert.equal(await ctx.mobilePage!.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, 'The signed-in mobile Dot conversation must fit the phone viewport before starting a call');
-  await ctx.mobilePage!.getByTestId('mobile-dot-nav').click();
+  const mobileDotNav = ctx.mobilePage!.getByTestId('mobile-dot-nav');
+  if (await mobileDotNav.isVisible()) await mobileDotNav.click();
   await ctx.mobilePage!.getByTestId('conversation-call-launch').click();
   const call = ctx.mobilePage!.getByTestId('voice-call');
   await call.waitFor({ state: 'visible' });

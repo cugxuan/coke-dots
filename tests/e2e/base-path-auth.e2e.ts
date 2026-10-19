@@ -367,7 +367,8 @@ async function main() {
   });
   page.on('pageerror', error => pageErrors.push(error.message));
 
-  await page.goto(baseUrl, { waitUntil: 'domcontentloaded' });
+  const deepLink = `${baseUrl}activity`;
+  await page.goto(deepLink, { waitUntil: 'domcontentloaded' });
   await page.getByRole('heading', { name: '让你的个人代理持续推进工作' }).waitFor({ state: 'visible' });
   assert.equal(await page.getByText('需要配置 Google OAuth').count(), 0, 'OAuth configuration must load from the prefixed API path');
   const googleLogin = page.getByRole('link', { name: '使用 Google 登录' });
@@ -394,13 +395,17 @@ async function main() {
   await page.getByRole('heading', { name: 'Google account' }).waitFor({ state: 'visible' });
   await page.getByRole('link', { name: 'Continue with Google' }).click({ noWaitAfter: true });
   try {
-    await page.waitForURL(baseUrl, { timeout: 15_000 });
+    await page.waitForURL(deepLink, { timeout: 15_000 });
   } catch (error) {
     throw new Error(`Mobile OAuth callback did not return to the app. OAuth trace: ${oauthTrace.join(' | ')}. Browser trace: ${browserTrace.slice(-20).join(' | ')}. Current URL: ${page.url()}. ${error instanceof Error ? error.message : String(error)}`);
   }
   await page.getByTestId('app-shell').waitFor({ state: 'visible' });
   await page.waitForFunction(() => document.querySelector('[data-testid="app-shell"]')?.getAttribute('data-state-loaded') === 'true');
-  assert.equal(page.url(), baseUrl, 'Completing OAuth must return to the mounted mobile app path');
+  assert.equal(page.url(), deepLink, 'Completing OAuth must return to the requested page inside the mount');
+  await page.getByRole('heading', { name: 'Activity', exact: true }).waitFor({ state: 'visible' });
+  assert.equal((await page.reload({ waitUntil: 'domcontentloaded' }))?.status(), 200);
+  await page.getByRole('heading', { name: 'Activity', exact: true }).waitFor({ state: 'visible' });
+  assert.equal(page.url(), deepLink, 'Refreshing a mounted page must keep its route');
   assert(oauthCallbackCookieSeen, 'The browser must send the HttpOnly OAuth state cookie to the prefixed callback path');
   assert(oauthCookieScopeCorrect, 'The OAuth state cookie must be HttpOnly, SameSite=Lax, and scoped to the exact public callback path');
   assert(oauthCookieClearScopeCorrect, 'The callback must clear the OAuth state cookie on that same prefixed path');
