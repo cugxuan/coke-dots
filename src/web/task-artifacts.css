@@ -13,6 +13,8 @@
 .task-artifact-action:focus-visible{outline:2px solid #9b82c7;outline-offset:2px}
 .task-artifact-preview{width:100%;height:min(62vh,560px);border:1px solid #e9e6ec;border-radius:8px;background:#fff}
 .task-artifact-error{margin:3px 0;color:#a0615b;font-size:11px;line-height:1.5}
+.task-artifact-hint{margin:0 0 10px;color:#81748f;font-size:11px;line-height:1.5}
+.message-download-reply{margin:8px 0 3px}
 .dots-dark .task-artifacts{border-color:#37313d;background:#211d24;color:#e7e2eb;box-shadow:0 4px 16px #0003}
 .dots-dark .task-artifacts-heading strong,.dots-dark .task-artifact-file-copy strong{color:#e7e2eb}
 .dots-dark .task-artifacts-heading small,.dots-dark .task-artifact-file-icon{background:#322b39;color:#c4b2df}

@@ -7,6 +7,7 @@ import { appFetch, request } from './api.ts';
 import './base.css';
 import { ComputerView, type ComputerHandle } from './ComputerView.tsx';
 import { TaskArtifacts } from './TaskArtifacts.tsx';
+import { ReplyDownload } from './ReplyDownload.tsx';
 import { DotContextPanel } from './DotContextPanel.tsx';
 import { SlackSetupModal } from './SlackSetupModal.tsx';
 import { DingTalkSetupModal } from './DingTalkSetupModal.tsx';
@@ -241,6 +242,14 @@ function App() {
     for (const entry of entries) if (entry.taskId && (entry.kind === 'user' || !anchors.has(entry.taskId))) anchors.set(entry.taskId, entry.id);
     return anchors;
   }, [entries]);
+  const artifactEntry = useMemo(() => {
+    const anchors = new Map<string, number>();
+    for (const entry of entries) {
+      const task = entry.taskId ? taskById.get(entry.taskId) : undefined;
+      if (task && (task.engine === 'pi' || task.engine === 'dsh') && !['queued', 'working', 'delegating'].includes(task.status)) anchors.set(task.id, entry.id);
+    }
+    return anchors;
+  }, [entries, taskById]);
   const currentVoiceCallScope = authContext ? `${authContext.tenant.id}:${authContext.user.id}` : '';
   const currentVoiceCalls = voiceCallsScope === currentVoiceCallScope ? voiceCalls : [];
   const voiceCallsLoaded = voiceCallsScope === currentVoiceCallScope;
@@ -528,14 +537,16 @@ function App() {
                 <div>
                   <div className="message-name">{item.entry.kind === 'user' ? '你' : item.entry.kind === 'dot' ? state.profile.name : '系统'}</div>
                   <MessageBody body={item.entry.body} onOpenPage={id => openPage(id, item.entry.taskId)} />
+                  {item.entry.kind === 'dot' && item.entry.body.trim() && <ReplyDownload body={item.entry.body} title={item.entry.taskId ? taskById.get(item.entry.taskId)?.title : undefined} />}
                   {Boolean(item.entry.attachments?.length) && <ul className="message-attachments" data-testid="message-attachments" aria-label="附加文件">{item.entry.attachments!.map(attachment => <li key={attachment.id}><span aria-hidden="true">▤</span><span>{attachment.name}</span></li>)}</ul>}
                   <MessageTimestamp value={item.entry.createdAt} />
                 </div>
               </article>
               {item.entry.taskId && progressEntry.get(item.entry.taskId) === item.entry.id && taskById.has(item.entry.taskId) && <TaskProgress task={taskById.get(item.entry.taskId)!} onOpen={selected ? undefined : () => { setSelected(item.entry.taskId); }} onBack={selected ? () => setSelected(null) : undefined} />}
+              {!selected && item.entry.taskId && artifactEntry.get(item.entry.taskId) === item.entry.id && <TaskArtifacts taskId={item.entry.taskId} refreshKey={taskById.get(item.entry.taskId)!.updatedAt} autoPreview={false} onOpenComputer={openComputer} />}
             </Fragment>
             : <CallHistoryEntry key={item.id} call={item.call} />)}
-          {selectedTask?.status === 'done' && (selectedTask.engine === 'pi' || selectedTask.engine === 'dsh') && <TaskArtifacts key={selectedTask.id} taskId={selectedTask.id} onOpenComputer={openComputer} />}
+          {selectedTask && (selectedTask.engine === 'pi' || selectedTask.engine === 'dsh') && !['queued', 'working', 'delegating'].includes(selectedTask.status) && <TaskArtifacts key={selectedTask.id} taskId={selectedTask.id} refreshKey={selectedTask.updatedAt} onOpenComputer={openComputer} />}
           {selectedTask && <TaskControls task={selectedTask} act={act} />}
         </div>}
         <div className="composer-wrap">

@@ -8,7 +8,7 @@ function contentUrl(taskId: string, path: string) {
   return appPath(`/api/tasks/${encodeURIComponent(taskId)}/artifacts/file/${safePath}`);
 }
 
-export function TaskArtifacts({ taskId, onOpenComputer }: { taskId: string; onOpenComputer: () => void }) {
+export function TaskArtifacts({ taskId, refreshKey, autoPreview = true, onOpenComputer }: { taskId: string; refreshKey?: string; autoPreview?: boolean; onOpenComputer: () => void }) {
   const [artifacts, setArtifacts] = useState<TaskArtifact[] | null>(null);
   const [error, setError] = useState('');
   const [previewPath, setPreviewPath] = useState<string | null>(null);
@@ -32,7 +32,7 @@ export function TaskArtifacts({ taskId, onOpenComputer }: { taskId: string; onOp
         // HTML is the most useful task output to see immediately (for example,
         // a small game or interactive report). Keep other files opt-in so a
         // task with many outputs does not flood the conversation.
-        const html = value.artifacts.find(artifact => artifact.mediaType === 'text/html' && artifact.previewable);
+        const html = autoPreview && value.artifacts.find(artifact => artifact.mediaType === 'text/html' && artifact.previewable);
         if (!html) return;
         try {
           const previewResponse = await appFetch(`/api/tasks/${encodeURIComponent(taskId)}/artifacts/preview-url?path=${encodeURIComponent(html.path)}`, { signal: controller.signal });
@@ -53,7 +53,7 @@ export function TaskArtifacts({ taskId, onOpenComputer }: { taskId: string; onOp
       }
     })();
     return () => controller.abort();
-  }, [taskId]);
+  }, [taskId, refreshKey, autoPreview]);
 
   async function togglePreview(artifactPath: string) {
     if (previewPath === artifactPath) { setPreviewPath(null); return; }
@@ -84,8 +84,9 @@ export function TaskArtifacts({ taskId, onOpenComputer }: { taskId: string; onOp
   if (artifacts === null) return <section className="task-artifacts" data-testid="task-artifacts-loading" aria-label="任务文件"><span>正在查找生成的文件…</span></section>;
   if (!artifacts.length && !error) return null;
 
-  return <section className="task-artifacts" data-testid="task-artifacts" aria-label="任务文件">
+  return <section className="task-artifacts" data-testid="task-artifacts" data-task-id={taskId} aria-label="任务文件">
     <div className="task-artifacts-heading"><span aria-hidden="true">▤</span><strong>生成的文件</strong>{artifacts.length > 0 && <small>{artifacts.length}</small>}</div>
+    {artifacts.length > 0 && <p className="task-artifact-hint">下载到你自己的电脑，随时查看和使用。</p>}
     {error && <p className="task-artifact-error" role="status">{error}</p>}
     {artifacts.length > 0 && <div className="task-artifact-list">
       {artifacts.map(artifact => {
@@ -96,7 +97,7 @@ export function TaskArtifacts({ taskId, onOpenComputer }: { taskId: string; onOp
           <span className="task-artifact-file-copy"><strong title={artifact.path}>{artifact.name}</strong><small>{formatSize(artifact.size)}{artifact.previewable ? ' · 可预览' : ''}</small></span>
           {artifact.previewable && <button type="button" className="task-artifact-action" aria-expanded={isPreviewed} onClick={() => void togglePreview(artifact.path)}>{isPreviewed ? '收起预览' : '预览'}</button>}
           {artifact.mediaType === 'text/html' && <button type="button" className="task-artifact-action" data-testid="open-artifact-in-computer" disabled={openingPath !== null} onClick={() => void openInComputer(artifact.path)}>{openingPath === artifact.path ? '正在打开…' : '在云电脑中打开'}</button>}
-          <a className="task-artifact-action" href={url} download={artifact.name}>下载</a>
+          <a className="task-artifact-action" href={url} download={artifact.name}>下载到本机</a>
           {isPreviewed && previewUrls[artifact.path] && <iframe className="task-artifact-preview" data-testid="task-artifact-preview" title={`预览 ${artifact.name}`} src={previewUrls[artifact.path]} sandbox="allow-scripts" referrerPolicy="no-referrer" />}
         </article>;
       })}

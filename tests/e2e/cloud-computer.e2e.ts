@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer as createHttpServer, type Server } from 'node:http';
 import { createServer as createNetServer } from 'node:net';
 import type { Duplex } from 'node:stream';
@@ -27,6 +27,8 @@ const agentCalls: Record<string, unknown>[] = [];
 const takeoverInterruptedTasks = new Set<string>();
 const taskArtifacts = new Map<string, { path: string; name: string; mediaType: string; size: number; previewable: boolean }[]>();
 const taskArtifactBodies = new Map<string, Map<string, string>>();
+const csvPath = '导出/查询结果 #1.csv';
+const csvBody = '公司,备注\n比亚迪,"已核验，待补充"\n';
 const browserActions: { hash: string; action: string; owner: string; x?: number; y?: number }[] = [];
 const remoteHttpPaths: string[] = [];
 const remoteUpgradePaths: string[] = [];
@@ -115,8 +117,8 @@ async function startRemote() {
           const artifactPath = requestUrl.searchParams.get('path') || '';
           const body = taskArtifactBodies.get(taskId)?.get(artifactPath);
           if (body === undefined) return content(res, 404, 'application/json', JSON.stringify({ error: 'artifact not found' }));
-          const mediaType = artifactPath.endsWith('.js') ? 'text/javascript; charset=utf-8' : 'text/html; charset=utf-8';
-          res.writeHead(200, { 'content-type': mediaType, 'content-length': Buffer.byteLength(body), 'cache-control': 'no-store', 'x-dots-artifact-name': encodeURIComponent(artifactPath.split('/').at(-1) || 'artifact'), 'x-dots-artifact-previewable': 'true' });
+          const mediaType = artifactPath.endsWith('.csv') ? 'text/csv; charset=utf-8' : artifactPath.endsWith('.js') ? 'text/javascript; charset=utf-8' : 'text/html; charset=utf-8';
+          res.writeHead(200, { 'content-type': mediaType, 'content-length': Buffer.byteLength(body), 'cache-control': 'no-store', 'x-dots-artifact-name': encodeURIComponent(artifactPath.split('/').at(-1) || 'artifact'), 'x-dots-artifact-previewable': String(!artifactPath.endsWith('.csv')) });
           res.end(body);
           return;
         }
@@ -151,6 +153,11 @@ async function startRemote() {
             });
             takeoverInterruptedTasks.add(taskId);
             return content(res, 200, 'application/json', JSON.stringify({ status: 'waiting', pausedForControl: true, message: '我已暂停当前操作，因为你正在接管电脑。交还电脑后，请告诉我继续。', engine: 'pi', sessionId: 'cloud-session-1' }));
+          }
+          if (String(body.prompt).includes('E2E failed download followup')) {
+            taskArtifacts.get(taskId)!.push({ path: csvPath, name: '查询结果 #1.csv', mediaType: 'text/csv', size: Buffer.byteLength(csvBody), previewable: false });
+            taskArtifactBodies.get(taskId)!.set(csvPath, csvBody);
+            return content(res, 500, 'application/json', JSON.stringify({ error: 'E2E partial output failure' }));
           }
           const streamProgress = req.headers.accept === 'application/x-ndjson' && String(body.prompt).includes('俄罗斯方块');
           if (streamProgress) {
@@ -428,8 +435,25 @@ try {
   await progress.getByTestId('task-timing').getByText(/模型响应 1.2 秒/).waitFor();
   await page.locator('.timeline .message.dot').filter({ hasText: '俄罗斯方块已创建' }).waitFor();
   assert.equal(await progress.getByRole('button', { name: '任务详情 →' }).count(), 1, 'Completing a task must leave the Dot conversation open');
+  const mainFiles = page.locator(`[data-testid="task-artifacts"][data-task-id="${created.task.id}"]`);
+  const mainHtml = mainFiles.locator('[data-artifact-path="tetris.html"]');
+  await mainHtml.waitFor();
+  assert.equal(await mainFiles.getByTestId('task-artifact-preview').count(), 0, 'The main conversation exposes downloads without automatically loading HTML');
+  const fileDownloadPromise = page.waitForEvent('download');
+  await mainHtml.getByRole('link', { name: '下载到本机' }).click();
+  const fileDownload = await fileDownloadPromise;
+  assert.equal(fileDownload.suggestedFilename(), 'tetris.html');
+  assert.equal(await readFile((await fileDownload.path())!, 'utf8'), taskArtifactBodies.get(created.task.id)!.get('tetris.html'));
+  const reply = page.locator('.timeline .message.dot').filter({ hasText: '俄罗斯方块已创建' });
+  const replyBody = await reply.locator('.message-body').innerText();
+  const replyDownloadPromise = page.waitForEvent('download');
+  await reply.getByTestId('download-reply').click();
+  const replyDownload = await replyDownloadPromise;
+  assert.match(replyDownload.suggestedFilename(), /-回复\.md$/);
+  assert.equal(await readFile((await replyDownload.path())!, 'utf8'), replyBody, 'Downloaded Markdown must contain the complete displayed reply');
   await page.reload();
-  await page.getByRole('button', { name: '你的 dot', exact: true }).click();
+  await page.getByTestId('computer-split').waitFor();
+  await mainHtml.waitFor();
   await page.getByTestId(`task-progress-${created.task.id}`).getByText('本轮 150 tokens').waitFor();
   await page.getByTestId(`task-progress-${created.task.id}`).getByRole('button', { name: '任务详情 →' }).click();
   await page.getByRole('button', { name: '返回主聊天' }).click();
@@ -516,6 +540,23 @@ try {
   assert.equal(agentCalls.filter(call => call.taskId === takeoverPauseTask.task.id).length, 2, 'Continuing after returning control should resume the same cloud task');
   await page.screenshot({ path: join(artifacts, '06-cloud-task-resumed-after-takeover.png') });
 
+  await page.goto(`${baseUrl}/chat/${created.task.id}`);
+  await page.getByTestId('task-composer').fill('E2E failed download followup');
+  await page.getByTestId('task-composer').press('Enter');
+  await page.getByTestId(`task-progress-${created.task.id}`).locator('.task-progress-badge.failed').waitFor();
+  const csvFile = page.locator('[data-testid="task-artifact"]').filter({ hasText: '查询结果 #1.csv' });
+  await csvFile.waitFor();
+  await page.goto(`${baseUrl}/chat`);
+  await csvFile.waitFor();
+  const csvDownloadPromise = page.waitForEvent('download');
+  await csvFile.getByRole('link', { name: '下载到本机' }).click();
+  const csvDownload = await csvDownloadPromise;
+  assert.equal(csvDownload.suggestedFilename(), '查询结果 #1.csv');
+  assert.equal(await readFile((await csvDownload.path())!, 'utf8'), csvBody, 'Partial files from a failed follow-up remain downloadable in the main conversation, including encoded nested paths');
+  assert.equal(await mainFiles.count(), 1, 'A task must have one current file list across all its replies');
+  await page.reload();
+  await csvFile.waitFor();
+
   const betaContext = await browser.newContext({ viewport: { width: 1440, height: 980 }, deviceScaleFactor: 1 });
   const betaPage = await betaContext.newPage();
   await signIn(betaPage, 'cloud-beta@example.test');
@@ -526,6 +567,8 @@ try {
   assert.deepEqual(crossTenantArtifact, { status: 404, body: { error: '任务不存在' } }, 'A tenant must not enumerate another tenant task files');
   const crossTenantContentStatus = await betaPage.evaluate(async id => (await fetch(`/api/tasks/${id}/artifacts/content?path=${encodeURIComponent('tetris.html')}`)).status, created.task.id);
   assert.equal(crossTenantContentStatus, 404, 'A tenant must not read another tenant task files');
+  const crossTenantDownloadStatus = await betaPage.evaluate(async id => (await fetch(`/api/tasks/${id}/artifacts/file/tetris.html`)).status, created.task.id);
+  assert.equal(crossTenantDownloadStatus, 404, 'A tenant must not download another tenant task files');
   const crossTenantPreviewStatus = await betaPage.evaluate(async previewUrl => (await fetch(previewUrl)).status, alphaArtifactChecks.previewUrl);
   assert.equal(crossTenantPreviewStatus, 404, 'A signed preview URL must not expose a tenant artifact to a different signed-in tenant');
   const crossTenantOpenStatus = await betaPage.evaluate(async id => (await fetch(`/api/tasks/${id}/artifacts/open-in-computer`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ path: 'tetris.html' }) })).status, created.task.id);
@@ -554,7 +597,7 @@ try {
   await betaPage.screenshot({ path: join(artifacts, '07-beta-isolated-desktop.png') });
   await betaContext.close();
   await alphaContext.close();
-  console.log(JSON.stringify({ result: 'passed', checks: ['chat and computer split with retained composer', 'first screen click coordinates and delayed noVNC keyboard focus', 'cancelled and rejected takeover send no desktop input', 'stale polling cannot undo takeover', 'outside clicks including other iframes return control and close noVNC', 'chat submission retains the computer pane', 'cloud screenshot', 'local permission independence', 'recoverable browser-context status and error code', 'authenticated noVNC WebSocket proxy', 'takeover browser navigation/click/type', 'return control', 'remote Agent kernel dispatch', 'computer takeover pauses the active task and Chrome resumes it after control returns', 'chat artifact list and iframe preview with linked assets', 'sandboxed HTML preview headers', 'one-click cloud-browser artifact open and return control', 'cross-tenant artifact read/open denial', 'tenant token and runtime separation'], artifacts }, null, 2));
+  console.log(JSON.stringify({ result: 'passed', checks: ['chat and computer split with retained composer', 'first screen click coordinates and delayed noVNC keyboard focus', 'cancelled and rejected takeover send no desktop input', 'stale polling cannot undo takeover', 'outside clicks including other iframes return control and close noVNC', 'chat submission retains the computer pane', 'cloud screenshot', 'local permission independence', 'recoverable browser-context status and error code', 'authenticated noVNC WebSocket proxy', 'takeover browser navigation/click/type', 'return control', 'remote Agent kernel dispatch', 'computer takeover pauses the active task and Chrome resumes it after control returns', 'main conversation file and Markdown reply downloads with exact bytes', 'failed follow-up preserves Chinese CSV downloads and refreshes one file list', 'chat artifact list and iframe preview with linked assets', 'sandboxed HTML preview headers', 'one-click cloud-browser artifact open and return control', 'cross-tenant artifact read/download/open denial', 'tenant token and runtime separation'], artifacts }, null, 2));
 } catch (error) {
   if (page) await page.screenshot({ path: join(artifacts, 'failure.png'), fullPage: true }).catch(() => undefined);
   throw new Error(`${error instanceof Error ? error.message : String(error)}\n${logs.join('')}`);
