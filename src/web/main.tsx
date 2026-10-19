@@ -20,6 +20,7 @@ import { DotAvatarEditor } from './DotAvatarEditor.tsx';
 import { DotSetupEditor } from './DotSetupEditor.tsx';
 import { DotComputerChoice } from './DotComputerChoice.tsx';
 import { VoiceCall } from './VoiceCall.tsx';
+import { CallHistoryEntry } from './CallHistoryEntry.tsx';
 import { DictationButton } from './DictationButton.tsx';
 import './shell-replica.css';
 import './onboarding-replica.css';
@@ -513,7 +514,7 @@ function App() {
               </article>
               {item.entry.taskId && progressEntry.get(item.entry.taskId) === item.entry.id && taskById.has(item.entry.taskId) && <TaskProgress task={taskById.get(item.entry.taskId)!} onOpen={selected ? undefined : () => { setSelected(item.entry.taskId); }} onBack={selected ? () => setSelected(null) : undefined} />}
             </Fragment>
-            : <article key={item.id} data-testid="chat-timeline-item" data-timestamp={item.at} className="message voice-call-ended" data-call-id={item.call.id}><div className="voice-call-ended-chip"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M7.1 3.8 10 7.2 8.2 9.1a13 13 0 0 0 6.7 6.7l1.9-1.8 3.4 2.9-.8 3.2a1.8 1.8 0 0 1-2 1.4C9 20.2 3.8 15 2.5 6.6a1.8 1.8 0 0 1 1.4-2z" fill="currentColor" /></svg>Me: Call ended</div><small>Optional</small><MessageTimestamp value={item.at} /></article>)}
+            : <CallHistoryEntry key={item.id} call={item.call} />)}
           {selectedTask?.status === 'done' && (selectedTask.engine === 'pi' || selectedTask.engine === 'dsh') && <TaskArtifacts key={selectedTask.id} taskId={selectedTask.id} onOpenComputer={openComputer} />}
           {selectedTask && <TaskControls task={selectedTask} act={act} />}
         </div>}

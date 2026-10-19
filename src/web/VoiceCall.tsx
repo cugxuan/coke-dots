@@ -35,6 +35,7 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
 }) {
   const [displayMode, setDisplayMode] = useState<'desktop' | 'mobile'>(() => window.matchMedia(MOBILE_CALL_LAYOUT_QUERY).matches ? 'mobile' : 'desktop');
   const [mobileMinimized, setMobileMinimized] = useState(false);
+  const [callRequestId] = useState(() => crypto.randomUUID());
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [muted, setMuted] = useState(false);
   const [speakerOn, setSpeakerOn] = useState(true);
@@ -132,6 +133,7 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
 
   useEffect(() => {
     activeRef.current = true;
+    let disposed = false;
     startedAtRef.current = Date.now();
     const timer = window.setInterval(() => {
       if (!startupFailedRef.current) setElapsedSeconds(Math.floor((Date.now() - startedAtRef.current) / 1000));
@@ -680,6 +682,7 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
         const providerResponse = await appFetch('/api/voice/provider');
         if (!providerResponse.ok) throw new Error('无法读取语音服务配置');
         const provider = await providerResponse.json() as { provider?: string; configured?: boolean; model?: string };
+        if (disposed || !activeRef.current) return;
         if (provider.provider !== 'browser' && provider.provider !== 'qwen' && provider.provider !== 'volcengine') throw new Error('服务端配置了不支持的语音供应商');
         const selectedProvider = provider.provider === 'qwen' || provider.provider === 'volcengine' ? provider.provider : 'browser';
         providerRef.current = selectedProvider;
@@ -696,11 +699,11 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
           prewarmedAudioContextRef.current = null;
           if (context && context.state !== 'closed') void context.close();
         }
-        const response = await appFetch('/api/voice-calls', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+        const response = await appFetch('/api/voice-calls', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ requestId: callRequestId }) });
         const call = await response.json() as VoiceCallSession & { error?: string };
         if (!response.ok) throw new Error(call.error || 'HTTP ' + response.status);
         sessionRef.current = call;
-        if (!activeRef.current) {
+        if (disposed || !activeRef.current) {
           const durationSeconds = Math.max(0, Math.floor((Date.now() - startedAtRef.current) / 1000));
           await appFetch('/api/voice-calls/' + call.id, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'end', durationSeconds }) });
           return;
@@ -721,7 +724,7 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
           startRecognitionRef.current();
         }
       } catch (error) {
-        if (activeRef.current) {
+        if (!disposed && activeRef.current) {
           const message = error instanceof Error ? error.message : '无法启动语音通话';
           setCallError(message);
           setStatus('通话无法启动');
@@ -747,6 +750,7 @@ export function VoiceCall({ dotName, appearance, initialAudioContext, onTranscri
     })();
 
     return () => {
+      disposed = true;
       activeRef.current = false;
       window.clearInterval(timer);
       recognitionRef.current?.abort();

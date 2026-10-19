@@ -14,6 +14,7 @@ export async function desktopVoiceCall(ctx: UiScenarioContext) {
   await ctx.alphaPage!.getByRole('button', { name: '拨打 dot', exact: true }).waitFor({ state: 'visible' });
   const desktopViewport = ctx.alphaPage!.viewportSize();
   assert(desktopViewport, 'The desktop call E2E must use a fixed browser viewport');
+  const creationRequest = ctx.alphaPage!.waitForRequest(request => request.method() === 'POST' && new URL(request.url()).pathname === '/api/voice-calls');
   await ctx.alphaPage!.getByTestId('profile-voice-call-launch').click();
   let profileCall = ctx.alphaPage!.getByTestId('voice-call');
   await profileCall.waitFor({ state: 'visible' });
@@ -32,9 +33,46 @@ export async function desktopVoiceCall(ctx: UiScenarioContext) {
   const desktopGreetingSequence = await ctx.alphaPage!.evaluate(() => (window as unknown as { __dotsVoiceEvents: string[] }).__dotsVoiceEvents.slice(0, 2));
   assert.deepEqual(desktopGreetingSequence, ['spoken:你好，我是 dot，有什么我可以帮你？', 'listening'],
     'The call must play a Chinese greeting before opening the browser microphone input');
+  const creationBody = (await creationRequest).postDataJSON() as { requestId: string };
+  assert.match(creationBody.requestId, /^[a-f0-9-]{36}$/, 'The UI must identify one call attempt across request retries');
+  const replayedCalls = await ctx.alphaPage!.evaluate(async body => Promise.all(Array.from({ length: 5 }, async () => {
+    const response = await fetch('/api/voice-calls', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    return await response.json() as { id: string; startedAt: string; endedAt: string | null; durationSeconds: number | null };
+  })), creationBody);
+  assert(replayedCalls.every(call => call.id === replayedCalls[0]!.id && call.startedAt === replayedCalls[0]!.startedAt),
+    'Concurrent deliveries of one call request must return the same history record');
   await ctx.screenshot(ctx.alphaPage!, 'voice-call-compact-desktop');
-  await profileCall.getByRole('button', { name: '结束通话' }).click();
+  await profileCall.getByRole('button', { name: '结束通话' }).evaluate(button => { (button as HTMLButtonElement).click(); (button as HTMLButtonElement).click(); });
   await profileCall.waitFor({ state: 'hidden' });
+  const endedReplay = await ctx.alphaPage!.evaluate(async ({ body, id }) => {
+    const calls = await (await fetch('/api/voice-calls')).json() as { id: string; endedAt: string; durationSeconds: number }[];
+    const ended = calls.find(call => call.id === id);
+    const repeated = await (await fetch(`/api/voice-calls/${id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'end', durationSeconds: 999 }) })).json();
+    const restarted = await (await fetch('/api/voice-calls', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })).json();
+    const invalid = await fetch('/api/voice-calls', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ requestId: '' }) });
+    return { ended, repeated, restarted, count: calls.length, invalid: invalid.status };
+  }, { body: creationBody, id: replayedCalls[0]!.id });
+  assert.deepEqual(endedReplay.repeated, endedReplay.ended, 'Hangup retries must not extend the recorded call');
+  assert.deepEqual(endedReplay.restarted, endedReplay.ended, 'Late creation retries must not create another ended-call chip');
+  assert.equal(endedReplay.count, 1);
+  assert.equal(endedReplay.invalid, 400);
+
+  let releaseProvider!: () => void;
+  const providerGate = new Promise<void>(resolve => { releaseProvider = resolve; });
+  let providerRequested!: () => void;
+  const providerStarted = new Promise<void>(resolve => { providerRequested = resolve; });
+  await ctx.alphaPage!.route('**/api/voice/provider', async route => { providerRequested(); await providerGate; await route.continue(); });
+  await ctx.alphaPage!.getByTestId('voice-call-launch').click();
+  await providerStarted;
+  await ctx.alphaPage!.getByTestId('voice-call').getByRole('button', { name: '结束通话' }).click();
+  await ctx.alphaPage!.getByTestId('voice-call').waitFor({ state: 'hidden' });
+  const providerFinished = ctx.alphaPage!.waitForResponse(response => new URL(response.url()).pathname === '/api/voice/provider');
+  releaseProvider();
+  await (await providerFinished).finished();
+  await ctx.alphaPage!.unroute('**/api/voice/provider');
+  await ctx.delay(200);
+  const afterCancelledStartup = await ctx.alphaPage!.evaluate(async () => (await (await fetch('/api/voice-calls')).json() as unknown[]).length);
+  assert.equal(afterCancelledStartup, 1, 'Closing before startup completes must not create a background call record');
 
   await ctx.alphaPage!.setViewportSize({ width: 690, height: 930 });
   await ctx.openProfile(ctx.alphaPage!);
@@ -311,7 +349,7 @@ export async function desktopVoiceCall(ctx: UiScenarioContext) {
     const snapshot = await (await fetch('/api/state')).json() as { tasks: { instruction: string; status: string; result: string | null }[] };
     return snapshot.tasks.some(task => task.instruction === text && task.status === 'done' && task.result === 'Voice request finished after the call ended.');
   }, instruction, { timeout: 15_000 });
-  const alphaCalls = await ctx.alphaPage!.evaluate(async () => await fetch('/api/voice-calls').then(response => response.json())) as { id: string; endedAt: string | null; durationSeconds: number | null }[];
+  const alphaCalls = await ctx.alphaPage!.evaluate(async () => await fetch('/api/voice-calls').then(response => response.json())) as { id: string; startedAt: string; endedAt: string | null; durationSeconds: number | null }[];
   assert.equal(alphaCalls.length, 7, 'Three profile viewport checks plus mobile and desktop conversation header, context panel, and composer must each persist a call');
   assert(alphaCalls.every(item => item.endedAt), 'Ending each call must persist its completion time');
   assert(alphaCalls.some(item => item.durationSeconds !== null && item.durationSeconds >= 1));
@@ -346,8 +384,15 @@ export async function desktopVoiceCall(ctx: UiScenarioContext) {
   await scrollPane.evaluate(element => { element.scrollTop = element.scrollHeight; });
   const timelineTimes = await ctx.alphaPage!.locator('.timeline [data-testid="chat-timeline-item"]').evaluateAll(elements => elements.map(element => Date.parse(element.getAttribute('data-timestamp') || '')));
   assert(timelineTimes.every((time, index) => index === 0 || timelineTimes[index - 1]! <= time), 'Conversation entries and ended-call chips must appear in chronological order');
-  assert.equal(await ctx.alphaPage!.getByText('Me: Call ended', { exact: true }).count(), 7, 'Each ended call should remain visible in the Dot conversation after the call panel closes');
-  assert.equal(await ctx.alphaPage!.getByText('Optional', { exact: true }).count(), 7, 'The ended-call state should retain the optional label visible in the reference');
+  assert.equal(await ctx.alphaPage!.getByText('通话结束', { exact: true }).count(), 7, 'Each intentional call must have exactly one ended-call chip');
+  assert.equal(await ctx.alphaPage!.getByText('Optional', { exact: true }).count(), 0, 'Call history must show real time information instead of placeholder text');
+  for (const record of alphaCalls) {
+    const entry = ctx.alphaPage!.locator(`.voice-call-ended[data-call-id="${record.id}"]`);
+    assert.deepEqual(await entry.locator('time').evaluateAll(times => times.map(time => time.getAttribute('datetime'))), [record.startedAt, record.endedAt]);
+    const seconds = record.durationSeconds!;
+    const duration = `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
+    assert.equal(await entry.getByTestId('voice-call-duration').innerText(), `时长 ${duration}`);
+  }
   await ctx.screenshot(ctx.alphaPage!, 'voice-call-ended-in-conversation');
   await ctx.alphaPage!.reload({ waitUntil: 'domcontentloaded' });
   await ctx.alphaPage!.getByTestId('app-shell').waitFor({ state: 'visible' });

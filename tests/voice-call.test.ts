@@ -25,11 +25,45 @@ test('voice call history is durable and scoped to its workspace and owner', () =
 
     const ended = store.endVoiceCall(alpha.tenant.id, alpha.user.id, call.id, 12, '2026-10-06T03:00:12.000Z');
     assert.deepEqual(ended, { ...call, endedAt: '2026-10-06T03:00:12.000Z', durationSeconds: 12 });
+    assert.deepEqual(store.endVoiceCall(alpha.tenant.id, alpha.user.id, call.id, 99, '2026-10-06T03:01:39.000Z'), ended,
+      'A repeated hangup must preserve the first end time and duration');
+    // Exercise migration from the schema that predates call creation keys.
+    store.db.exec('DROP INDEX voice_calls_request; ALTER TABLE voice_calls DROP COLUMN request_id');
     store.close();
 
     store = new Store(directory);
     assert.deepEqual(store.voiceCalls(alpha.tenant.id, alpha.user.id), [ended]);
     assert.deepEqual(store.voiceCalls(beta.tenant.id, beta.user.id), []);
+    store.close();
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('call creation retries reuse one durable record without merging separate calls or owners', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'coke-dots-call-request-'));
+  try {
+    let store = new Store(directory);
+    const alpha = store.signInGoogle({ subject: 'call-request-alpha', email: 'call-alpha@example.test', name: 'Alpha' });
+    const beta = store.signInGoogle({ subject: 'call-request-beta', email: 'call-beta@example.test', name: 'Beta' });
+    const start = '2026-10-19T03:00:00.000Z';
+    const requestId = 'same-call-request';
+    const call = store.createVoiceCall(alpha.tenant.id, alpha.user.id, start, requestId);
+    assert.deepEqual(store.createVoiceCall(alpha.tenant.id, alpha.user.id, undefined, requestId), call);
+    assert.notEqual(store.createVoiceCall(beta.tenant.id, beta.user.id, start, requestId).id, call.id);
+    assert.notEqual(store.createVoiceCall(alpha.tenant.id, beta.user.id, start, requestId).id, call.id,
+      'Another member cannot collide with an owner’s key');
+    assert.notEqual(store.createVoiceCall(alpha.tenant.id, alpha.user.id, start, 'next-call-request').id, call.id,
+      'Two intentional calls at the same time must remain distinct');
+    const legacy = store.createVoiceCall(alpha.tenant.id, alpha.user.id, start);
+    assert.notEqual(store.createVoiceCall(alpha.tenant.id, alpha.user.id, start).id, legacy.id,
+      'Older clients without keys still create independent calls');
+    const ended = store.endVoiceCall(alpha.tenant.id, alpha.user.id, call.id, 65, '2026-10-19T03:01:05.000Z');
+    store.close();
+    store = new Store(directory);
+    assert.deepEqual(store.createVoiceCall(alpha.tenant.id, alpha.user.id, undefined, requestId), ended,
+      'A delayed creation retry after restart/hangup must not reopen or duplicate the call');
+    assert.equal(store.voiceCalls(alpha.tenant.id, alpha.user.id).length, 4);
+    assert.throws(() => store.createVoiceCall(alpha.tenant.id, alpha.user.id, start, ''), /通话请求 ID 无效/);
+    assert.throws(() => store.createVoiceCall(alpha.tenant.id, alpha.user.id, start, 'x'.repeat(129)), /通话请求 ID 无效/);
     store.close();
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });

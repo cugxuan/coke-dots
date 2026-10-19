@@ -166,6 +166,8 @@ export function initializeStoreSchema(db: DatabaseSync) {
     );
     CREATE INDEX IF NOT EXISTS tasks_chat_owner ON tasks(tenant_id,created_by_user_id,created_at DESC);
   `);
+  addColumnIfMissing('voice_calls', 'request_id', 'TEXT');
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS voice_calls_request ON voice_calls(tenant_id,user_id,request_id)');
   addColumnIfMissing('dingtalk_group_selections', 'corp_id', "TEXT NOT NULL DEFAULT ''");
   const monitorColumns = db.prepare('PRAGMA table_info(dingtalk_group_monitors)').all() as { name: string }[];
   const hadDingtalkMonitorKeywords = monitorColumns.some(column => column.name === 'keywords_json');

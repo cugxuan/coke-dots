@@ -449,7 +449,11 @@ const server = createServer(async (req, res) => {
       return;
     }
     if (path === '/api/voice-calls' && req.method === 'POST') {
-      return reply(res, 201, store.createVoiceCall(session.tenant.id, session.user.id));
+      const requestId = body.requestId;
+      if (requestId !== undefined && (typeof requestId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(requestId))) {
+        return reply(res, 400, { error: '通话请求 ID 无效' });
+      }
+      return reply(res, 201, store.createVoiceCall(session.tenant.id, session.user.id, undefined, requestId));
     }
     if (realtimeVoiceMatch && req.method === 'POST') {
       const call = store.getVoiceCall(session.tenant.id, session.user.id, realtimeVoiceMatch[1]);

@@ -470,9 +470,16 @@ export class Store {
     };
   }
 
-  createVoiceCall(tenantId: string, userId: string, now = new Date().toISOString()): VoiceCallSession {
+  createVoiceCall(tenantId: string, userId: string, now = new Date().toISOString(), requestId?: string): VoiceCallSession {
+    if (requestId !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(requestId)) throw new Error('通话请求 ID 无效');
     const id = randomUUID();
-    this.db.prepare('INSERT INTO voice_calls(id,tenant_id,user_id,started_at) VALUES (?,?,?,?)').run(id, tenantId, userId, now);
+    this.db.prepare(`INSERT INTO voice_calls(id,tenant_id,user_id,started_at,request_id) VALUES (?,?,?,?,?)
+      ON CONFLICT(tenant_id,user_id,request_id) DO NOTHING`).run(id, tenantId, userId, now, requestId ?? null);
+    if (requestId !== undefined) {
+      const row = this.db.prepare('SELECT id FROM voice_calls WHERE tenant_id=? AND user_id=? AND request_id=?')
+        .get(tenantId, userId, requestId) as { id: string };
+      return this.getVoiceCall(tenantId, userId, row.id)!;
+    }
     return { id, tenantId, startedAt: now, endedAt: null, durationSeconds: null };
   }
 
