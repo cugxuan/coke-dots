@@ -9,9 +9,10 @@ function fixture() {
   const sent: { type: string; item?: { type?: string; call_id?: string; output?: string; content?: { text?: string }[] } }[] = [];
   const records: { id: string; role: string; text: string }[] = [];
   const calls: { name: string; args: unknown; turn: number; id: string }[] = [];
+  let onSend = (_event: unknown) => {};
   let runTool = async () => ({ task_id: 'task-1', status: 'queued' });
   const session = new QwenVoiceSession({
-    send: event => sent.push(event as typeof sent[number]), beginTurn: () => ++turn, isCurrent: candidate => candidate === turn,
+    send: event => { sent.push(event as typeof sent[number]); onSend(event); }, beginTurn: () => ++turn, isCurrent: candidate => candidate === turn,
     playback: value => { playback = value; }, status: () => {}, transcript: () => {}, error: () => {},
     record: (id, role, text) => records.push({ id, role, text }),
     tool: async (name, args, input) => { calls.push({ name, args, ...input }); return await runTool(); },
@@ -23,7 +24,7 @@ function fixture() {
   const done = (id: string, output: NonNullable<QwenVoiceEvent['response']>['output'] = [], status = 'completed') => session.handle({ type: 'response.done', response: { id, status, output } });
   const tool = (callId = 'call-1') => ({ type: 'function_call', call_id: callId, name: 'delegate_task', arguments: '{"instruction":"创建文件"}' });
   return { session, sent, records, calls, start, transcript, created, done, tool,
-    get turn() { return turn; }, get playback() { return playback; }, setTool: (fn: typeof runTool) => { runTool = fn; } };
+    setSend: (fn: typeof onSend) => { onSend = fn; }, get turn() { return turn; }, get playback() { return playback; }, setTool: (fn: typeof runTool) => { runTool = fn; } };
 }
 
 test('ordinary native voice answers are recorded once and never dispatch a task', () => {
@@ -147,4 +148,79 @@ test('failed transcription releases a pending input and interrupted explicit req
   f.session.speak('请重试', f.turn); f.created('speech'); f.done('speech', [f.tool()]);
   await tick();
   assert.equal(f.calls.length, 0);
+});
+
+test('a disconnected call queues current results and restores eight text items without replaying tools', () => {
+  const f = fixture();
+  for (let i = 0; i < 6; i++) {
+    f.start('input-' + i); f.transcript('input-' + i, '问题 ' + i);
+    f.created('answer-' + i); f.done('answer-' + i, [{ type: 'message', content: [{ text: '答复 ' + i }] }]);
+  }
+  f.session.transportLost();
+  f.session.speak('断线期间完成的任务', f.turn);
+  assert.equal(f.sent.length, 0);
+  f.session.setReady(); f.session.setReady();
+  assert.equal(f.sent.filter(event => event.item?.type === 'message').length, 2, 'one context message with eight items, then the result');
+  assert.equal(JSON.parse(f.sent[0].item!.content![0].text!.split('\n')[1]).length, 8);
+  assert(!JSON.stringify(f.sent).includes('问题 0'));
+  assert.equal(f.sent.filter(event => event.type === 'response.create').length, 1);
+  assert.equal(f.calls.length, 0);
+});
+
+test('reconnect cannot replay an interrupted result or block a fresh turn on an old response', () => {
+  const f = fixture();
+  f.start('old'); f.created('old-answer'); f.session.speak('不得复活的旧结果', f.turn);
+  f.start('new');
+  f.session.transportLost(); f.session.setReady();
+  f.start('fresh'); f.created('fresh-answer');
+  assert.equal(f.playback, true);
+  f.done('fresh-answer'); f.session.speak('新的完成结果', f.turn);
+  assert(!JSON.stringify(f.sent).includes('不得复活的旧结果'));
+  assert.equal(f.sent.filter(event => event.type === 'response.create').length, 1);
+});
+
+test('acceptance arriving across reconnection uses a receipt, never an orphaned tool output or another dispatch', async () => {
+  const f = fixture();
+  let release!: (value: { task_id: string; status: string }) => void;
+  f.setTool(() => new Promise(resolve => { release = resolve; }));
+  f.start('input'); f.transcript('input'); f.created('dispatch'); f.done('dispatch', [f.tool()]);
+  f.session.transportLost(); f.session.setReady();
+  release({ task_id: 'task-1', status: 'queued' }); await tick();
+  assert.equal(f.calls.length, 1);
+  assert(!f.sent.some(event => event.item?.type === 'function_call_output'));
+  assert(JSON.stringify(f.sent).includes('task-1'));
+  f.created('receipt'); f.done('receipt', [f.tool('must-not-dispatch')]); await tick();
+  assert.equal(f.calls.length, 1);
+});
+
+test('a result whose response never arrived can be delivered after reconnect but a finished one is not spoken again', () => {
+  const f = fixture();
+  f.session.speak('待播报结果', f.turn);
+  f.session.transportLost(); f.session.setReady();
+  assert.equal(f.sent.filter(event => event.type === 'response.create').length, 2);
+  f.created('recovered'); f.done('recovered');
+  f.session.transportLost(); f.session.setReady();
+  assert.equal(f.sent.filter(event => event.type === 'response.create').length, 2);
+});
+
+
+test('synchronous channel failure during a tool receipt cannot strand later task results', async () => {
+  const f = fixture();
+  f.setSend(() => { f.setSend(() => {}); f.session.transportLost(); });
+  f.start('input'); f.created('dispatch'); f.done('dispatch', [f.tool()]); await tick();
+  f.session.speak('断线后完成结果', f.turn);
+  f.session.setReady();
+  f.created('recovered-receipt'); f.done('recovered-receipt');
+  assert.equal(f.calls.length, 1);
+  assert(f.sent.some(event => event.item?.content?.some(part => part.text?.includes('断线后完成结果'))));
+  assert.equal(f.sent.filter(event => event.type === 'response.create').length, 2, 'one recovered receipt and one result');
+});
+
+test('a synchronous failure sending result text retains it exactly once for the replacement session', () => {
+  const f = fixture();
+  f.setSend(() => { f.setSend(() => {}); f.session.transportLost(); });
+  f.session.speak('待恢复播报', f.turn);
+  assert.equal(f.sent.filter(event => event.type === 'response.create').length, 0);
+  f.session.setReady();
+  assert.equal(f.sent.filter(event => event.type === 'response.create').length, 1);
 });

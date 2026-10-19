@@ -44,6 +44,12 @@ export async function qwenWebRtc(ctx: UiScenarioContext, model = 'qwen3.8-omni-f
       view.__dotsQwenHoldAudioCreated = false;
       view.__dotsQwenHoldAudioDone = false;
       view.__dotsQwenExtraStreams = 0;
+      view.__dotsQwenPeers = [];
+      // Keep long-task regression practical: a former 15-minute expiry becomes
+      // observable while the server deliberately holds this task's completion.
+      const nativeTimeout = window.setTimeout.bind(window);
+      view.__dotsRestoreTimeout = () => { window.setTimeout = nativeTimeout; };
+      window.setTimeout = (callback, delay, ...args) => nativeTimeout(callback, delay === 15 * 60 * 1000 ? 100 : delay, ...args);
       // Chat's existing stream is already connected. Speech must consume those
       // same updates even if opening another progress connection would fail.
       const NativeEventSource = window.EventSource;
@@ -64,6 +70,7 @@ export async function qwenWebRtc(ctx: UiScenarioContext, model = 'qwen3.8-omni-f
         send(raw) {
           const event = JSON.parse(raw);
           view.__dotsQwenSentEvents.push(event);
+          if (event.type === 'session.update' && view.__dotsQwenConfirmed) view.__dotsQwenEventChannel?.emit({ type: 'session.updated' });
           if (event.type === 'response.create') {
             const response = { id: 'audio-' + view.__dotsQwenAudioResponses.length, modalities: event.response.modalities };
             view.__dotsQwenAudioResponses.push(response);
@@ -75,7 +82,7 @@ export async function qwenWebRtc(ctx: UiScenarioContext, model = 'qwen3.8-omni-f
         close() { this.readyState = 'closed'; }
       }
       class FakePeerConnection {
-        constructor() { this.iceGatheringState = 'complete'; this.connectionState = 'new'; this.localDescription = null; this.ondatachannel = null; this.ontrack = null; this.onconnectionstatechange = null; this.sendChannel = null; }
+        constructor() { view.__dotsQwenPeers.push(this); view.__dotsQwenConfirmed = false; this.iceGatheringState = 'complete'; this.connectionState = 'new'; this.localDescription = null; this.ondatachannel = null; this.ontrack = null; this.onconnectionstatechange = null; this.sendChannel = null; }
         addTransceiver(kind, options) {
           if (kind !== 'audio' || options?.direction !== 'sendrecv') throw new Error('Voice call must reserve bidirectional audio before SDP offer');
           const sender = { track: null, async replaceTrack(nextTrack) { this.track = nextTrack; } };
@@ -95,7 +102,7 @@ export async function qwenWebRtc(ctx: UiScenarioContext, model = 'qwen3.8-omni-f
           remote.emit({ type: 'session.created' });
           this.sendChannel.readyState = 'open';
           this.sendChannel.onopen?.();
-          view.__dotsQwenConfirmSession = () => remote.emit({ type: 'session.updated' });
+          view.__dotsQwenConfirmSession = () => { view.__dotsQwenConfirmed = true; remote.emit({ type: 'session.updated' }); };
         }
         close() { this.connectionState = 'closed'; }
       }
@@ -231,6 +238,7 @@ export async function qwenWebRtc(ctx: UiScenarioContext, model = 'qwen3.8-omni-f
   assert.equal(await ctx.alphaPage!.evaluate(() => (window as unknown as { __dotsQwenSentEvents: { type: string }[] }).__dotsQwenSentEvents.filter(event => event.type === 'response.create').length), 5);
   await qwenSecretaryTools(ctx, turnResult.callId, turnResult.task.id);
   await qwenInterruption(ctx, model);
+  await qwenRecovery(ctx, turnResult.callId);
   assert.equal(await ctx.alphaPage!.evaluate(() => (window as unknown as { __dotsQwenExtraStreams: number }).__dotsQwenExtraStreams), 0, 'Voice results must reuse the chat snapshot without opening any additional SSE connections');
   await ctx.screenshot(ctx.alphaPage!, 'qwen-realtime-call-agent-result');
   await call.getByRole('button', { name: '结束通话' }).click();
@@ -270,6 +278,7 @@ export async function qwenWebRtc(ctx: UiScenarioContext, model = 'qwen3.8-omni-f
   assert(failedCallHistory[0]?.endedAt, 'A Qwen call that fails during microphone startup must not remain active in call history');
   await failedCall.getByRole('button', { name: '结束通话' }).click();
   await failedCall.waitFor({ state: 'detached' });
+  await ctx.alphaPage!.evaluate(() => (window as unknown as { __dotsRestoreTimeout: () => void }).__dotsRestoreTimeout());
 }
 
 interface QwenInterruptionWindow extends Window {
@@ -409,4 +418,39 @@ async function qwenInterruption(ctx: UiScenarioContext, model: string) {
   const texts = await page.evaluate(() => (window as unknown as QwenInterruptionWindow).__dotsQwenSentEvents.flatMap(e => e.item?.content?.map(p => p.text || '') || []));
   for (const obsolete of ['queued', 'late-task', 'late-acceptance']) assert(!texts.some(text => text.includes(`Voice interruption result: ${obsolete}.`)), `Obsolete ${obsolete} result must not be spoken`);
   assert.equal(texts.filter(text => text.includes(qwenLongVoiceSummary)).length, 1);
+}
+
+
+async function qwenRecovery(ctx: UiScenarioContext, callId: string) {
+  const page = ctx.alphaPage!;
+  const before = await page.evaluate(async () => ({ calls: (await fetch('/api/voice-calls').then(r => r.json())).length, tasks: (await fetch('/api/state').then(r => r.json())).tasks.length }));
+  await page.evaluate(() => {
+    const w = window as unknown as QwenInterruptionWindow;
+    w.__dotsQwenEventChannel.emit({ type: 'input_audio_buffer.speech_started', item_id: 'recovery-input' });
+    w.__dotsQwenEventChannel.emit({ type: 'conversation.item.input_audio_transcription.completed', item_id: 'recovery-input', transcript: 'E2E voice interruption reconnect-wait' });
+    w.__dotsQwenEventChannel.emit({ type: 'response.created', response: { id: 'recovery-task' } });
+    w.__dotsQwenEventChannel.emit({ type: 'response.done', response: { id: 'recovery-task', status: 'completed', output: [{ type: 'function_call', call_id: 'recovery-tool', name: 'delegate_task', arguments: JSON.stringify({ instruction: 'E2E voice interruption reconnect-wait' }) }] } });
+  });
+  await ctx.waitFor(() => qwenInterruptionReleases.has('reconnect-wait'), 10_000);
+  await page.getByTestId('voice-call').getByRole('button', { name: '静音' }).click();
+  const peersBefore = await page.evaluate(() => {
+    const w = window as unknown as { __dotsQwenPeers: { connectionState: string; onconnectionstatechange: () => void }[] };
+    const peer = w.__dotsQwenPeers.at(-1)!; peer.connectionState = 'failed'; peer.onconnectionstatechange(); peer.onconnectionstatechange();
+    return w.__dotsQwenPeers.length;
+  });
+  qwenInterruptionReleases.get('reconnect-wait')!();
+  await page.waitForFunction(async () => (await fetch('/api/state').then(r => r.json())).tasks.some((t: { instruction: string; status: string }) => t.instruction === 'E2E voice interruption reconnect-wait' && t.status === 'done'));
+  await page.waitForFunction(count => (window as unknown as { __dotsQwenPeers: unknown[] }).__dotsQwenPeers.length > count, peersBefore);
+  await page.waitForFunction(() => (window as unknown as QwenInterruptionWindow).__dotsQwenSentEvents.at(-1)?.type === 'session.update');
+  assert.equal(await page.evaluate(() => (window as unknown as QwenInterruptionWindow).__dotsQwenSentEvents.some(event => event.item?.content?.some(part => part.text?.includes('Voice interruption result: reconnect-wait.')))), false, 'No speech is sent before the replacement provider is ready');
+  await page.evaluate(() => (window as unknown as { __dotsQwenConfirmSession: () => void }).__dotsQwenConfirmSession());
+  await page.waitForFunction(() => (window as unknown as QwenInterruptionWindow).__dotsQwenSentEvents.some(event => event.item?.content?.some(part => part.text?.includes('Voice interruption result: reconnect-wait.'))));
+  const after = await page.evaluate(async id => ({
+    calls: await fetch('/api/voice-calls').then(r => r.json()), tasks: (await fetch('/api/state').then(r => r.json())).tasks.length,
+    muted: !(window as unknown as { __dotsQwenFakeTrack: { enabled: boolean } }).__dotsQwenFakeTrack.enabled,
+    resultRequests: (window as unknown as QwenInterruptionWindow).__dotsQwenSentEvents.filter(e => e.item?.content?.some(p => p.text?.includes('结果播报请求') && p.text.includes('Voice interruption result: reconnect-wait.'))).length,
+    id,
+  }), callId);
+  assert.equal(after.calls.length, before.calls); assert(after.calls.some((call: { id: string; endedAt: string | null }) => call.id === callId && !call.endedAt));
+  assert.equal(after.tasks, before.tasks + 1); assert.equal(after.muted, true); assert.equal(after.resultRequests, 1);
 }

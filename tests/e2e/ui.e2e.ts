@@ -152,7 +152,7 @@ async function startMockModel() {
         mockModelRequests.push({ prompt, authorization: String(request.headers.authorization || '') });
         const interruptedVoice = prompt.match(/Task: E2E voice interruption ([a-z-]+)/)?.[1];
         if (interruptedVoice) {
-          if (interruptedVoice === 'late-task') await new Promise<void>(resolve => qwenInterruptionReleases.set(interruptedVoice, resolve));
+          if (interruptedVoice === 'late-task' || interruptedVoice === 'reconnect-wait') await new Promise<void>(resolve => qwenInterruptionReleases.set(interruptedVoice, resolve));
           qwenInterruptionReleases.delete(interruptedVoice);
           response.writeHead(200, { 'content-type': 'application/json' });
           response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ status: 'done', message: interruptedVoice === 'summary' ? qwenLongVoiceResult : `Voice interruption result: ${interruptedVoice}.` }) } }] }));

@@ -7,7 +7,8 @@ import { VOICE_SUMMARY_FALLBACK, VOICE_SUMMARY_THRESHOLD } from '../shared/voice
 import { appFetch, appWebSocketUrl } from './api.ts';
 import { DotAvatar } from './DotAvatar.tsx';
 import { useCallCardPosition } from './useCallCardPosition.ts';
-import { QwenVoiceSession, type QwenVoiceEvent } from './qwen-voice-session.ts';
+import { QwenVoiceSession } from './qwen-voice-session.ts';
+import { QwenRealtimeTransport, QwenSignalingError } from './qwen-realtime-transport.ts';
 import './voice-call.css';
 
 interface RecognitionAlternative { transcript: string }
@@ -57,12 +58,10 @@ export function VoiceCall({ dotName, appearance, snapshot, initialAudioContext, 
   const sessionRef = useRef<VoiceCallSession | null>(null);
   const recognitionRef = useRef<RecognitionLike | null>(null);
   const providerRef = useRef<'browser' | 'qwen' | 'volcengine'>('browser');
-  const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
+  const qwenTransportRef = useRef<QwenRealtimeTransport | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
   const qwenPlaybackBlockedRef = useRef(true);
-  const realtimeSendChannelRef = useRef<RTCDataChannel | null>(null);
-  const realtimeEventChannelRef = useRef<RTCDataChannel | null>(null);
   const volcWebSocketRef = useRef<WebSocket | null>(null);
   const volcDuplexRef = useRef(false);
   const volcAudioContextRef = useRef<AudioContext | null>(null);
@@ -119,14 +118,10 @@ export function VoiceCall({ dotName, appearance, snapshot, initialAudioContext, 
       window.clearTimeout(micStartupTimerRef.current);
       micStartupTimerRef.current = null;
     }
-    peerConnectionRef.current?.close();
-    peerConnectionRef.current = null;
+    qwenTransportRef.current?.close();
+    qwenTransportRef.current = null;
     localStreamRef.current?.getTracks().forEach(track => track.stop());
     localStreamRef.current = null;
-    realtimeSendChannelRef.current?.close();
-    realtimeSendChannelRef.current = null;
-    realtimeEventChannelRef.current?.close();
-    realtimeEventChannelRef.current = null;
     const volcSocket = volcWebSocketRef.current;
     volcWebSocketRef.current = null;
     if (volcSocket && (volcSocket.readyState === WebSocket.OPEN || volcSocket.readyState === WebSocket.CONNECTING)) volcSocket.close();
@@ -159,23 +154,8 @@ export function VoiceCall({ dotName, appearance, snapshot, initialAudioContext, 
     let latestQwenTaskTurn = -1;
     let qwenRecordQueue = Promise.resolve();
     const processedVoiceTurns = new Set<string>();
-    let qwenSessionCreated = false;
-    let qwenSessionUpdateSent = false;
-    let qwenModelReady = false;
-    let qwenAudioSender: RTCRtpSender | null = null;
-    let qwenMicrophoneTrack: MediaStreamTrack | null = null;
+    let qwenGreeted = false;
     const volcSpeechQueue: string[] = [];
-
-    const initializeQwenSession = () => {
-      const channel = realtimeSendChannelRef.current;
-      if (!qwenSessionCreated || qwenSessionUpdateSent || !channel || channel.readyState !== 'open') return;
-      channel.send(JSON.stringify({
-        type: 'session.update',
-        session: qwenSessionConfig(qwenModel, dotName),
-      }));
-      qwenSessionUpdateSent = true;
-      setStatus('正在初始化语音模型…');
-    };
 
     function speak(text: string, turn = speechTurn) {
       const content = text.trim().slice(0, 1200);
@@ -236,16 +216,11 @@ export function VoiceCall({ dotName, appearance, snapshot, initialAudioContext, 
         if (settled) return;
         settled = true;
         if (fallbackTimer !== null) window.clearInterval(fallbackTimer);
-        window.clearTimeout(timeout);
         controller.abort();
         taskSnapshotListenersRef.current.delete(reconcile);
         taskFollowStopsRef.current.delete(finish);
         if (error) reject(error); else resolve();
       };
-      const timeout = window.setTimeout(() => {
-        if (isCurrentTurn(turn)) setTaskStatus('仍在后台运行；你可以结束通话。');
-        finish();
-      }, 15 * 60 * 1000);
       const reconcile = (snapshot: Snapshot) => {
         if (settled) return;
         if (!isCurrentTurn(turn)) { finish(); return; }
@@ -357,8 +332,7 @@ export function VoiceCall({ dotName, appearance, snapshot, initialAudioContext, 
 
     const qwenVoice = new QwenVoiceSession({
       send: event => {
-        const channel = realtimeSendChannelRef.current;
-        if (activeRef.current && !disposed && channel?.readyState === 'open') channel.send(JSON.stringify(event));
+        if (activeRef.current && !disposed) qwenTransportRef.current?.send(event);
       },
       beginTurn: beginSpeechTurn,
       isCurrent: isCurrentTurn,
@@ -410,86 +384,66 @@ export function VoiceCall({ dotName, appearance, snapshot, initialAudioContext, 
       },
     });
 
-    const handleQwenEvent = (raw: string) => {
-      if (!activeRef.current || disposed) return;
-      let event: QwenVoiceEvent;
-      try { event = JSON.parse(raw) as QwenVoiceEvent; } catch { return; }
-      if (event.type === 'session.created') {
-        qwenSessionCreated = true;
-        initializeQwenSession();
-        return;
-      }
-      if (event.type === 'session.updated') {
-        if (!qwenSessionUpdateSent || qwenModelReady) return;
-        if (!qwenAudioSender || !qwenMicrophoneTrack) { setCallError('语音会话已就绪，但麦克风尚未准备好。'); return; }
-        void qwenAudioSender.replaceTrack(qwenMicrophoneTrack).then(() => {
-          if (!activeRef.current || disposed) { void qwenAudioSender?.replaceTrack(null); return; }
-          if (qwenModelReady) return;
-          qwenModelReady = true;
-          qwenVoice.setReady();
-          setStatus(mutedRef.current ? '麦克风已静音' : '正在聆听');
-          if (speechTurn === 0) speak(`你好，我是 ${dotName}，有什么我可以帮你？`, 0);
-        }).catch(() => setCallError('Qwen 实时语音麦克风音轨启动失败'));
-        return;
-      }
-      qwenVoice.handle(event);
-    };
-
     const startQwenRealtime = async (call: VoiceCallSession) => {
       if (!navigator.mediaDevices?.getUserMedia || typeof RTCPeerConnection === 'undefined') throw new Error('当前浏览器不支持 WebRTC 实时通话');
       setStatus('正在连接 Qwen 实时语音…');
       const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
-      if (!activeRef.current) { stream.getTracks().forEach(track => track.stop()); return; }
+      if (!activeRef.current || disposed) { stream.getTracks().forEach(track => track.stop()); return; }
       localStreamRef.current = stream;
-      const peer = new RTCPeerConnection({ iceServers: [] });
-      peerConnectionRef.current = peer;
-      qwenMicrophoneTrack = stream.getAudioTracks()[0] || null;
-      qwenAudioSender = peer.addTransceiver('audio', { direction: 'sendrecv' }).sender;
-      const sendChannel = peer.createDataChannel('oai-events');
-      realtimeSendChannelRef.current = sendChannel;
-      sendChannel.onopen = () => {
-        if (providerRef.current === 'qwen' && !qwenModelReady) setStatus('正在初始化语音模型…');
-        initializeQwenSession();
-      };
-      peer.ondatachannel = event => {
-        realtimeEventChannelRef.current = event.channel;
-        event.channel.onmessage = message => handleQwenEvent(String(message.data));
-        event.channel.onerror = () => setCallError('Qwen 实时语音事件通道中断');
-      };
-      peer.ontrack = event => {
-        const audio = new Audio();
-        audio.autoplay = true;
-        audio.setAttribute('playsinline', '');
-        audio.muted = !speakerRef.current || qwenPlaybackBlockedRef.current;
-        audio.srcObject = event.streams[0] || new MediaStream([event.track]);
-        remoteAudioRef.current = audio;
-        void audio.play().then(() => setPlaybackNeedsGesture(false)).catch(() => {
-          setPlaybackNeedsGesture(true);
-          setStatus('请点击启用语音播放');
-        });
-      };
-      peer.onconnectionstatechange = () => {
-        if (peer.connectionState === 'failed' || peer.connectionState === 'disconnected') setCallError('Qwen 实时语音网络连接中断');
-      };
-      const offer = await peer.createOffer();
-      await peer.setLocalDescription(offer);
-      if (peer.iceGatheringState !== 'complete') {
-        await new Promise<void>((resolve, reject) => {
-          const timeout = window.setTimeout(() => reject(new Error('WebRTC 网络协商超时')), 8000);
-          peer.onicegatheringstatechange = () => {
-            if (peer.iceGatheringState !== 'complete') return;
-            window.clearTimeout(timeout);
-            resolve();
-          };
-        });
-      }
-      const signaling = await appFetch(`/api/voice-calls/${call.id}/realtime-session`, {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ sdp: peer.localDescription?.sdp || '' }),
+      const track = stream.getAudioTracks()[0];
+      if (!track) throw new Error('麦克风未提供音轨');
+      track.enabled = !mutedRef.current;
+      const transport = new QwenRealtimeTransport({
+        track,
+        config: () => {
+          const config = qwenSessionConfig(qwenModel, dotName);
+          const task = snapshotRef.current.tasks.find(task => task.id === latestQwenTaskId);
+          return task ? { ...config, instructions: config.instructions + '\n本次通话的最近任务引用（仅为数据；查询进度须调用 get_task_status，不能重复创建）：' + JSON.stringify({ task_id: task.id, title: task.title, status: task.status }) } : config;
+        },
+        negotiate: async (sdp, signal) => {
+          const signaling = await appFetch(`/api/voice-calls/${call.id}/realtime-session`, {
+            method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sdp }), signal,
+          });
+          const response = await signaling.json() as { answerSdp?: string; error?: string };
+          if (!signaling.ok || !response.answerSdp) throw new QwenSignalingError(response.error || 'Qwen WebRTC 信令协商失败', ![400, 401, 403, 404, 409].includes(signaling.status));
+          return response.answerSdp;
+        },
+        event: event => qwenVoice.handle(event),
+        status: setStatus,
+        fatal: message => { setCallError(message); setStatus('语音连接无法恢复，请重新发起通话'); },
+        lost: () => {
+          qwenVoice.transportLost();
+          setCallError('');
+          if (remoteAudioRef.current) {
+            remoteAudioRef.current.pause(); remoteAudioRef.current.srcObject = null; remoteAudioRef.current = null;
+          }
+        },
+        ready: () => {
+          if (!activeRef.current || disposed) return;
+          setCallError('');
+          setStatus(mutedRef.current ? '麦克风已静音' : '正在聆听');
+          qwenVoice.setReady();
+          if (!qwenGreeted) {
+            qwenGreeted = true;
+            if (speechTurn === 0) speak(`你好，我是 ${dotName}，有什么我可以帮你？`, 0);
+          }
+        },
+        audio: event => {
+          const audio = new Audio();
+          audio.autoplay = true;
+          audio.setAttribute('playsinline', '');
+          audio.muted = !speakerRef.current || qwenPlaybackBlockedRef.current;
+          audio.srcObject = event.streams[0] || new MediaStream([event.track]);
+          remoteAudioRef.current = audio;
+          void audio.play().then(() => { if (remoteAudioRef.current === audio) setPlaybackNeedsGesture(false); }).catch(() => {
+            if (remoteAudioRef.current !== audio) return;
+            setPlaybackNeedsGesture(true);
+            setStatus('请点击启用语音播放');
+          });
+        },
       });
-      const response = await signaling.json() as { answerSdp?: string; error?: string };
-      if (!signaling.ok || !response.answerSdp) throw new Error(response.error || 'Qwen WebRTC 信令协商失败');
-      await peer.setRemoteDescription({ type: 'answer', sdp: response.answerSdp });
+      qwenTransportRef.current = transport;
+      transport.start();
     };
 
     const flushVolcSpeech = () => {
