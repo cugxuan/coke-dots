@@ -6,8 +6,8 @@ The main composer can continue the task it displays, or classify a message in th
 
 `POST /api/chat/messages` accepts `messageId` (UUID), `instruction`, `engine`, `attachmentIds`, and `mode`:
 
-- `continue` requires `taskId`. It is an explicit selection and does not invoke the routing model.
-- `new` creates an independent task. The New chat view and “作为新任务发送” use this mode.
+- `continue` requires `taskId`. It is an explicit selection and skips both candidate retrieval and the routing model, regardless of the task's age.
+- `new` creates an independent task and also skips candidate retrieval and the routing model. The New chat view and “作为新任务发送” use this mode.
 - `auto` classifies the message against the initiating user's task cards. It returns a new task, a continuation, or `status: clarify` with a question and candidate choices. Clarification leaves the draft and attachments unsubmitted.
 
 `POST /api/tasks` retains its explicit task-creation contract for scheduling and integrations. This change does not route voice turns or automatic DingTalk events through the classifier.
@@ -16,9 +16,9 @@ The classifier uses the existing shared model configuration, one tool-free reque
 
 ## Recall and focus
 
-SQLite `chat_focus` stores one conversational focus and revision for each tenant/user pair. Only accepted chat submissions advance it; task completion and scheduled/background events do not. An older installation without a focus row falls back to the latest eligible user submission, not the latest task update.
+SQLite `chat_focus` stores one conversational focus and revision for each tenant/user pair. Only accepted chat submissions advance it; task completion and scheduled/background events do not. When the saved focus is outside the recent candidate window or absent, the classifier's focus hint falls back to the latest eligible user submission, not the latest task update.
 
-Recall reads at most 40 recent top-level tasks owned by the initiating user, excluding scheduled, automated, stopped and retired-engine tasks. It supplies at most eight cards: focus, title matches (including Chinese text), and recent user activity. Each card contains bounded excerpts of the original request, stored result, last user message and last assistant reply. The model chooses among these IDs. Matching titles are hints: a later empty task asking for missing context is not a substitute for the report that actually produced the evidence.
+Recall selects the latest eight top-level tasks owned by the initiating user, ordered by their last user message, excluding scheduled, automated, stopped and retired-engine tasks. Only those eight tasks have their evidence loaded and sent to the model. An old focus or matching title cannot displace a more recent conversation; explicitly continuing an old task makes it recent again. Each card contains bounded excerpts of the original request, stored result, last user message and last assistant reply. The model chooses among these IDs. Matching titles are hints: a later empty task asking for missing context is not a substitute for the report that actually produced the evidence.
 
 This is bounded recall, not a search over all historical work. Older tasks outside that window remain available by opening their task page and explicitly continuing. The model's association is probabilistic; users can choose an explicit task or start independent work.
 

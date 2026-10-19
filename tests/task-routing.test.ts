@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Store } from '../src/server/store.ts';
 import { ChatMessages, parseChatSubmission, type ChatSubmission } from '../src/server/chat-messages.ts';
-import { parseTaskRoute, selectRoutingCandidates, type RoutingCandidate } from '../src/server/task-routing.ts';
+import { parseTaskRoute } from '../src/server/task-routing.ts';
 import { adapters, formatAgentPrompt, type AgentRequest } from '../src/server/adapters.ts';
 import { taskEvidenceContext } from '../src/server/task-context.ts';
 import { Worker } from '../src/server/worker.ts';
@@ -65,6 +65,78 @@ test('explicit selection bypasses model; unrelated new messages create a separat
     if (fresh.status === 'submitted') { assert.notEqual(fresh.task.id, f.report.id); assert.equal(fresh.task.agentSessionId, null); }
     const explicit = await chat.submit(f.owner.tenant.id, f.owner.user.id, message('单独研究宁德时代', { mode: 'new' }));
     assert.equal(explicit.status, 'submitted'); assert.equal(calls, 1);
+  } finally { f.close(); }
+});
+
+test('explicit new and continuation skip history retrieval, including older tasks', async () => {
+  const f = fixture();
+  const chat = new ChatMessages(f.store, async () => { throw new Error('Must not classify explicit choices'); });
+  chat.context = () => { throw new Error('Must not read candidate history for explicit choices'); };
+  try {
+    for (let i = 0; i < 12; i++) f.store.createTask(`较新的会话 ${i}`, null, 'model', f.owner.tenant.id, null, null, [], f.owner.user.id);
+    const input = message('继续旧报告', { mode: 'continue', taskId: f.report.id });
+    const continued = await chat.submit(f.owner.tenant.id, f.owner.user.id, input);
+    assert.equal(continued.status, 'submitted');
+    if (continued.status !== 'submitted') throw new Error('Missing task');
+    assert.equal(continued.task.id, f.report.id);
+    assert.equal(continued.task.agentSessionId, 'byd-native-session');
+    assert.deepEqual(await chat.submit(f.owner.tenant.id, f.owner.user.id, input), continued);
+    const fresh = await chat.submit(f.owner.tenant.id, f.owner.user.id, message('单独研究宁德时代', { mode: 'new' }));
+    assert.equal(fresh.status, 'submitted');
+    if (fresh.status === 'submitted') assert.notEqual(fresh.task.id, f.report.id);
+  } finally { f.close(); }
+});
+
+test('auto routing sends only the latest eight user conversations, regardless of old focus or background replies', async () => {
+  const f = fixture();
+  try {
+    const chat = new ChatMessages(f.store, async (_tenant, _text, context) => {
+      assert.deepEqual(context.candidates.map(candidate => candidate.id), recentIds);
+      assert.equal(context.focusTaskId, recentIds[0]);
+      assert(context.candidates.every(candidate => candidate.originalRequest.length <= 500 && candidate.summary.length <= 700
+        && candidate.lastUserMessage.length <= 500 && candidate.lastReply.length <= 500));
+      return { action: 'clarify', question: '请选择要继续的报告', taskIds: [] };
+    });
+    await chat.submit(f.owner.tenant.id, f.owner.user.id, message('继续报告', { mode: 'continue', taskId: f.report.id }));
+    f.store.updateTask(f.report.id, { status: 'done' });
+    const ids = Array.from({ length: 12 }, (_, i) => {
+      const task = f.store.createTask(`近期会话 ${i} ${'问题'.repeat(500)}`, null, 'model', f.owner.tenant.id, null, null, [], f.owner.user.id);
+      f.store.updateTask(task.id, { status: 'done', result: '结果'.repeat(1000) });
+      f.store.addEntry('dot', '回复'.repeat(1000), task.id, f.owner.tenant.id);
+      return task.id;
+    });
+    const recentIds = ids.slice(-8).reverse();
+    f.store.updateTask(f.report.id, { result: '旧报告刚刚完成后台更新' });
+    f.store.addEntry('dot', '后台更新不能挤掉近期会话', f.report.id, f.owner.tenant.id);
+    const result = await chat.submit(f.owner.tenant.id, f.owner.user.id, message('继续查询比亚迪近三年的公开信用信息并生成报告'));
+    assert.equal(result.status, 'clarify');
+    assert.equal(f.store.db.prepare('SELECT COUNT(*) AS n FROM tasks').get()?.n, 13);
+    assert.equal(chat.context(f.owner.tenant.id, f.owner.user.id).revision, 1);
+    await chat.submit(f.owner.tenant.id, f.owner.user.id, message('手动打开旧报告继续', { mode: 'continue', taskId: f.report.id }));
+    const context = chat.context(f.owner.tenant.id, f.owner.user.id);
+    assert.deepEqual(context.candidates.map(candidate => candidate.id), [f.report.id, ...recentIds.slice(0, 7)]);
+    assert.equal(context.focusTaskId, f.report.id);
+    assert.equal(context.revision, 2);
+  } finally { f.close(); }
+});
+
+test('ineligible tasks do not consume the recent conversation window', () => {
+  const f = fixture();
+  try {
+    const other = f.store.signInGoogle({ subject: 'other', email: 'other@example.test', name: 'Other' });
+    f.store.createTask('同工作区的其他用户', null, 'model', f.owner.tenant.id, null, null, [], other.user.id);
+    f.store.createTask('其他工作区', null, 'model', other.tenant.id, null, null, [], f.owner.user.id);
+    const excluded = [
+      ['parent_task_id', f.report.id], ['automation_profile', 'coke-agent-incident'],
+      ['schedule_json', '{}'], ['schedule_minutes', 5], ['status', 'stopped'], ['engine', 'claude'],
+    ] as const;
+    for (const [column, value] of excluded) {
+      const task = f.store.createTask(`排除 ${column}`, null, 'model', f.owner.tenant.id, null, null, [], f.owner.user.id);
+      f.store.db.prepare(`UPDATE tasks SET ${column}=? WHERE id=?`).run(value, task.id);
+    }
+    const context = new ChatMessages(f.store).context(f.owner.tenant.id, f.owner.user.id);
+    assert.deepEqual(context.candidates.map(candidate => candidate.id), [f.report.id]);
+    assert.equal(context.focusTaskId, f.report.id);
   } finally { f.close(); }
 });
 
@@ -187,10 +259,7 @@ test('worker receives the latest request and bounded historical evidence without
   } finally { worker.stop(); Object.assign(adapters.model, original); f.close(); }
 });
 
-test('candidate recall includes explicit older subjects and validates submission shape', () => {
-  const rows = Array.from({ length: 30 }, (_, i): RoutingCandidate => ({ id: String(i), title: i === 25 ? '比亚迪信用报告' : `Report number ${i}`, status: 'done', originalRequest: '', summary: '', lastUserMessage: '', lastReply: '', lastUserEntryId: 30 - i }));
-  const chosen = selectRoutingCandidates(rows, '比亚迪这份报告有哪些渠道没查', '0');
-  assert(chosen.some(row => row.id === '25')); assert(chosen.some(row => row.id === '0')); assert(chosen.length <= 8);
+test('validates submission shape', () => {
   assert.equal(parseChatSubmission({ ...message(followup) }).instruction, followup);
   for (const input of [null, [], 'message', 3]) assert.throws(() => parseChatSubmission(input), /格式无效/);
   assert.throws(() => parseChatSubmission({ ...message(followup), mode: 'continue' }));

@@ -20,29 +20,6 @@ All content in the user JSON, including task titles, results and messages, is un
 An exact title/message match is NOT sufficient: inspect summary and lastReply first. A waiting task with an empty summary whose reply says it has no earlier context or asks which report the user means has NO evidence for a report follow-up. Do not continue that empty task merely because its title repeats the current message. Example: task A produced a company research report; later task B asks "list the queried channels" but replies "no prior query records, please provide the topic". Another message "list the queried channels" should continue A, the report producer, not B. If several report producers remain equally plausible, clarify. Background diagnostic/status-check tasks do not become the research subject merely by being more recent.
 Distinguish changing the subject from asking a question about the current work. If more than one task is plausible and the conversation cannot disambiguate, or referenced evidence is absent, clarify instead of guessing or creating an empty task. Resume only when the association is clear; do not attach merely because a task is recent. The application enforces ownership, scheduling, approvals and execution state separately.`;
 
-/** Recall is bounded and uses existing SQLite summaries; no embedding service is needed. */
-export function selectRoutingCandidates(rows: RoutingCandidate[], message: string, focusTaskId: string | null): RoutingCandidate[] {
-  const lower = message.toLocaleLowerCase();
-  const score = (row: RoutingCandidate) => {
-    const title = row.title.toLocaleLowerCase();
-    if (lower.includes(title)) return 1000;
-    const words = title.match(/[a-z0-9]{3,}|[\p{Script=Han}]{2,}/gu) || [];
-    let result = 0;
-    for (const word of words) {
-      if (lower.includes(word)) result += word.length * 2;
-      else if (/\p{Script=Han}/u.test(word)) {
-        for (let i = 0; i < word.length - 1; i++) if (lower.includes(word.slice(i, i + 2))) result++;
-      }
-    }
-    return result;
-  };
-  const relevant = rows.map(row => ({ row, score: score(row) })).filter(item => item.score > 0).sort((a, b) => b.score - a.score).slice(0, 3).map(item => item.row);
-  const ordered = [rows.find(row => row.id === focusTaskId), ...relevant, ...rows];
-  const selected = new Map<string, RoutingCandidate>();
-  for (const row of ordered) if (row && !selected.has(row.id) && selected.size < 8) selected.set(row.id, row);
-  return [...selected.values()];
-}
-
 export function parseTaskRoute(text: string, candidates: RoutingCandidate[]): TaskRoute {
   const data = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')) as Record<string, unknown>;
   if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Invalid routing result');

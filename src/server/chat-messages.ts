@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { isEngine, type ChatMessageResult, type Engine, type Task } from '../shared/types.ts';
 import { Store } from './store.ts';
-import { classifyTaskMessage, selectRoutingCandidates, type RoutingCandidate, type RoutingContext, type TaskRoute } from './task-routing.ts';
+import { classifyTaskMessage, type RoutingCandidate, type RoutingContext, type TaskRoute } from './task-routing.ts';
 
 export interface ChatSubmission {
   messageId: string; instruction: string; engine: Engine; mode: 'auto' | 'new' | 'continue';
@@ -32,19 +32,25 @@ export function parseChatSubmission(value: unknown): ChatSubmission {
 export class ChatMessages {
   constructor(private store: Store, private classify: Classifier = classifyTaskMessage) {}
 
-  context(tenantId: string, userId: string, instruction = ''): RoutingContext & { revision: number } {
+  context(tenantId: string, userId: string): RoutingContext & { revision: number } {
     const focus = this.store.db.prepare('SELECT task_id,revision FROM chat_focus WHERE tenant_id=? AND user_id=?')
       .get(tenantId, userId) as { task_id: string; revision: number } | undefined;
-    const rows = this.store.db.prepare(`SELECT t.id,t.title,t.status,substr(t.instruction,1,500) AS originalRequest,
+    // Select IDs before hydrating evidence so older tasks never contribute history to routing.
+    const rows = this.store.db.prepare(`WITH recent AS MATERIALIZED (
+      SELECT t.id,t.created_at,
+        COALESCE((SELECT MAX(e.id) FROM entries e WHERE e.tenant_id=t.tenant_id AND e.task_id=t.id AND e.kind='user'),0) AS lastUserEntryId
+      FROM tasks t WHERE t.tenant_id=? AND t.created_by_user_id=? AND t.parent_task_id IS NULL AND t.automation_profile IS NULL
+        AND t.schedule_json IS NULL AND t.schedule_minutes IS NULL AND t.status<>'stopped' AND t.engine IN ('model','pi','dsh')
+      ORDER BY lastUserEntryId DESC,t.created_at DESC,t.id DESC LIMIT 8
+    ) SELECT t.id,t.title,t.status,substr(t.instruction,1,500) AS originalRequest,
       substr(COALESCE(t.result,''),1,700) AS summary,
       COALESCE((SELECT substr(e.body,1,500) FROM entries e WHERE e.tenant_id=t.tenant_id AND e.task_id=t.id AND e.kind='user' ORDER BY e.id DESC LIMIT 1),'') AS lastUserMessage,
       COALESCE((SELECT substr(e.body,1,500) FROM entries e WHERE e.tenant_id=t.tenant_id AND e.task_id=t.id AND e.kind='dot' ORDER BY e.id DESC LIMIT 1),'') AS lastReply,
-      COALESCE((SELECT MAX(e.id) FROM entries e WHERE e.tenant_id=t.tenant_id AND e.task_id=t.id AND e.kind='user'),0) AS lastUserEntryId
-      FROM tasks t WHERE t.tenant_id=? AND t.created_by_user_id=? AND t.parent_task_id IS NULL AND t.automation_profile IS NULL
-        AND t.schedule_json IS NULL AND t.schedule_minutes IS NULL AND t.status<>'stopped' AND t.engine IN ('model','pi','dsh')
-      ORDER BY (t.id=?) DESC,lastUserEntryId DESC LIMIT 40`).all(tenantId, userId, focus?.task_id || '') as unknown as RoutingCandidate[];
+      recent.lastUserEntryId
+      FROM recent JOIN tasks t ON t.id=recent.id
+      ORDER BY recent.lastUserEntryId DESC,recent.created_at DESC,recent.id DESC`).all(tenantId, userId) as unknown as RoutingCandidate[];
     const focusTaskId = rows.find(row => row.id === focus?.task_id)?.id || rows[0]?.id || null;
-    return { focusTaskId, revision: focus?.revision || 0, candidates: selectRoutingCandidates(rows, instruction, focusTaskId) };
+    return { focusTaskId, revision: focus?.revision || 0, candidates: rows };
   }
 
   async submit(tenantId: string, userId: string, input: ChatSubmission, signal?: AbortSignal): Promise<ChatMessageResult> {
@@ -52,10 +58,10 @@ export class ChatMessages {
     const hash = createHash('sha256').update(JSON.stringify(input)).digest('hex');
     const duplicate = this.receipt(tenantId, userId, input.messageId, hash);
     if (duplicate) return duplicate;
-    const context = this.context(tenantId, userId, input.instruction);
+    const context = input.mode === 'auto' ? this.context(tenantId, userId) : null;
     let route: TaskRoute;
     if (input.mode === 'continue') route = { action: 'continue', taskId: input.taskId!, reason: '继续当前选中的任务' };
-    else if (input.mode === 'new' || !context.candidates.length) route = { action: 'new', reason: '开始新任务' };
+    else if (input.mode === 'new' || !context?.candidates.length) route = { action: 'new', reason: '开始新任务' };
     else {
       try {
         route = await this.classify(tenantId, input.instruction, { focusTaskId: context.focusTaskId, candidates: context.candidates }, signal);
@@ -66,15 +72,17 @@ export class ChatMessages {
     }
     signal?.throwIfAborted();
     if (route.action === 'clarify') return { status: 'clarify', question: route.question,
-      candidates: context.candidates.filter(candidate => !route.taskIds.length || route.taskIds.includes(candidate.id)).map(({ id, title, status }) => ({ id, title, status })) };
-    if (input.mode === 'auto' && route.action === 'continue' && !context.candidates.some(candidate => candidate.id === route.taskId)) throw new ChatSubmissionError('关联结果已失效，请选择任务后重试');
+      candidates: (context?.candidates ?? []).filter(candidate => !route.taskIds.length || route.taskIds.includes(candidate.id)).map(({ id, title, status }) => ({ id, title, status })) };
+    if (context && route.action === 'continue' && !context.candidates.some(candidate => candidate.id === route.taskId)) throw new ChatSubmissionError('关联结果已失效，请选择任务后重试');
     this.store.db.exec('BEGIN IMMEDIATE');
     try {
       if (!this.store.isTenantMember(tenantId, userId)) throw new ChatSubmissionError('工作区不可用', 403);
       const existing = this.receipt(tenantId, userId, input.messageId, hash);
       if (existing) { this.store.db.exec('COMMIT'); return existing; }
-      const revision = (this.store.db.prepare('SELECT revision FROM chat_focus WHERE tenant_id=? AND user_id=?').get(tenantId, userId) as { revision: number } | undefined)?.revision || 0;
-      if (input.mode === 'auto' && revision !== context.revision) throw new ChatSubmissionError('你在另一条消息中切换了话题，请重新发送，或明确选择要继续的任务');
+      if (context) {
+        const revision = (this.store.db.prepare('SELECT revision FROM chat_focus WHERE tenant_id=? AND user_id=?').get(tenantId, userId) as { revision: number } | undefined)?.revision || 0;
+        if (revision !== context.revision) throw new ChatSubmissionError('你在另一条消息中切换了话题，请重新发送，或明确选择要继续的任务');
+      }
       const task = route.action === 'new'
         ? this.store.createTask(input.instruction, null, input.engine, tenantId, null, null, input.attachmentIds, userId)
         : this.continueTask(tenantId, userId, route.taskId, input);
