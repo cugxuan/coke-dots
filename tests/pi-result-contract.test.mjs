@@ -28,7 +28,7 @@ async function fixture(replies, verify, options = {}) {
     const emit = (delta, finish_reason = null) => res.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta, finish_reason }] })}\n\n`);
     emit({ role: 'assistant', ...(reply.tools ? { tool_calls: reply.tools } : { content: reply.text ?? '' }) });
     emit({}, reply.finish || (reply.tools ? 'tool_calls' : 'stop'));
-    res.write(`data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 } })}\n\n`);
+    res.write(`data: ${JSON.stringify({ choices: [], usage: reply.usage || { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 } })}\n\n`);
     res.end('data: [DONE]\n\n');
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -52,6 +52,58 @@ test('Pi sends the app result contract as a system instruction and accepts a val
     assert.equal(requests.length, 1);
     assert(requests[0].messages.some(message => message.role === 'system' && message.content.includes('Coke Dots task result protocol')));
     assert(requests[0].messages.some(message => message.role === 'user' && JSON.stringify(message.content).includes('请只回复')));
+  });
+});
+
+test('Pi retains the completed answer when overflow compaction temporarily removes it from active context', async () => {
+  await fixture([
+    { tools: bash("printf 'saved once\\n' >> completed.txt; printf 'evidence %.0s' {1..16000}") },
+    { text: decision('已保存 completed.txt。'), usage: { prompt_tokens: 42725, completion_tokens: 665, total_tokens: 43390 } },
+    { text: 'The task is complete. completed.txt was written once; no further work remains.' },
+  ], async ({ run, requests, events, cwd }) => {
+    const result = await run({ prompt: 'Save evidence once and report completion.' });
+    assert.equal(result.status, 'done');
+    assert.equal(result.message, '已保存 completed.txt。');
+    // Pi schedules an overflow continuation after compaction; it must not replay work.
+    await new Promise(resolve => setTimeout(resolve, 200));
+    assert.equal(requests.length, 3, 'one tool request, final answer, and compaction only');
+    assert.equal(await readFile(path.join(cwd, 'completed.txt'), 'utf8'), 'saved once\n');
+    assert.equal(events.filter(event => event.kind === 'metrics').at(-1).timing.compactions, 1);
+    const directory = path.join(cwd, '.coke-dots-agent-runtime/pi-sessions');
+    const [file] = await readdir(directory);
+    const journal = (await readFile(path.join(directory, file), 'utf8')).trim().split('\n').map(JSON.parse);
+    assert(journal.some(row => row.type === 'compaction'), 'the real SDK persisted a compaction');
+    assert.equal(journal.filter(row => row.message?.role === 'toolResult').length, 1);
+  });
+});
+
+test('Pi repairs captured final JSON missing its closing brace after compaction without replaying tools', async () => {
+  await fixture([
+    { tools: bash("printf 'saved once\\n' >> completed.txt; printf 'evidence %.0s' {1..16000}") },
+    { text: decision('已保存结果；来源 B 需要登录。', 'waiting').slice(0, -1), usage: { prompt_tokens: 42725, completion_tokens: 20, total_tokens: 42745 } },
+    { text: 'Evidence was saved. Source B requires login. Do not repeat the write.' },
+    { text: decision('已保存结果；来源 B 需要登录。', 'waiting') },
+  ], async ({ run, requests, cwd }) => {
+    const result = await run({ prompt: 'Save evidence once and report any blockers.' });
+    assert.equal(result.status, 'waiting');
+    assert.equal(result.message, '已保存结果；来源 B 需要登录。');
+    await new Promise(resolve => setTimeout(resolve, 200));
+    assert.equal(requests.length, 4);
+    assert(!requests[3].tools?.length);
+    assert.match(JSON.stringify(requests[3].messages.at(-1)), /已保存结果；来源 B 需要登录/);
+    assert.equal(await readFile(path.join(cwd, 'completed.txt'), 'utf8'), 'saved once\n');
+  });
+});
+
+test('Pi still rejects an empty final answer after compaction instead of using an older tool turn', async () => {
+  await fixture([
+    { tools: bash("printf 'evidence %.0s' {1..16000}") },
+    { text: '', usage: { prompt_tokens: 42725, completion_tokens: 0, total_tokens: 42725 } },
+    { text: 'The tool returned evidence but there was no final answer.' },
+  ], async ({ run, requests }) => {
+    await assert.rejects(run({ prompt: 'Inspect fixture evidence.' }), /Pi returned no assistant text/);
+    await new Promise(resolve => setTimeout(resolve, 200));
+    assert.equal(requests.length, 3);
   });
 });
 

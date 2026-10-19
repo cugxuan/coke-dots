@@ -132,8 +132,16 @@ async function runPi(input, cwd, config, injectedSdk) {
   let finishCompaction;
   let compactionDeadline;
   let repairToolCall = false;
+  let completedAssistant;
   const unsubscribe = session.subscribe?.(event => {
     metrics.event(event); report(event);
+    // Overflow compaction can remove a successful final reply from active context
+    // before prompt() resolves. Keep the actual emitted answer, not that mutable
+    // context (which may then end at an already completed tool call).
+    if (event.type === 'message_end' && event.message?.role === 'assistant') completedAssistant = event.message;
+    if (event.type === 'agent_end') {
+      completedAssistant = [...event.messages].reverse().find(row => row?.role === 'assistant') || completedAssistant;
+    }
     if (repairingResult && event.type === 'message_end' && event.message?.content?.some(item => item.type === 'toolCall')) {
       repairToolCall = true;
       abortSession();
@@ -147,7 +155,7 @@ async function runPi(input, cwd, config, injectedSdk) {
   if (input.signal?.aborted) abortSession();
   else input.signal?.addEventListener('abort', abortSession, { once: true });
   const completedText = async () => {
-    const assistant = [...session.messages].reverse().find(row => row?.role === 'assistant');
+    const assistant = completedAssistant || [...session.messages].reverse().find(row => row?.role === 'assistant');
     // Pi starts automatic compaction from agent_end without awaiting it in prompt().
     // Capture the answer before the compactor replaces the active context.
     if (compaction) await compaction;
@@ -175,6 +183,7 @@ async function runPi(input, cwd, config, injectedSdk) {
       let timedOut = false;
       const deadline = setTimeout(() => { timedOut = true; abortSession(); }, 30_000);
       try {
+        completedAssistant = undefined;
         await session.prompt(resultRepairInstruction + JSON.stringify({ validationError: error.message, previousAnswer: text }));
         if (timedOut) throw new Error('任务结果格式整理超时；已保留会话和已执行操作。');
         if (repairToolCall) throw new Error('任务结果格式整理尝试调用工具，已停止；已保留此前操作。');
