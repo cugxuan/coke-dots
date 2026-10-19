@@ -1,6 +1,11 @@
 /* Browser call UI: a compact floating control card, independent of viewport size. */
 .voice-call-card{position:fixed;z-index:130;top:64px;right:18px;width:min(320px,calc(100vw - 28px));box-sizing:border-box;padding:13px 14px 12px;border:1px solid #e7e5e8;border-radius:15px;background:#fff;color:#302e35;box-shadow:0 10px 32px #211b2b22,0 2px 5px #211b2b0d;font-family:inherit}
+.voice-call-card:not(.voice-call-card-mobile){max-height:calc(100dvh - 24px);overflow-y:auto}
 .voice-call-card-heading{display:flex;align-items:center;min-width:0;gap:10px}
+.voice-call-card-drag-handle{display:flex;align-items:center;flex:1;min-width:0;gap:10px;border-radius:8px;cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none}
+.voice-call-card-drag-handle:focus-visible{outline:2px solid #8d75b7;outline-offset:4px}
+.voice-call-card.is-dragging .voice-call-card-drag-handle{cursor:grabbing}
+.voice-call-card-grip{width:8px;height:16px;flex:none;color:#99939e;pointer-events:none}
 .voice-call-card .voice-call-card-avatar{width:38px;height:38px;flex:none;filter:drop-shadow(0 2px 5px #7d65a52b)}
 .voice-call-card-identity{display:grid;min-width:0;gap:4px}
 .voice-call-card-identity>strong{overflow:hidden;color:#302e35;font-size:13px;font-weight:650;text-overflow:ellipsis;white-space:nowrap}

@@ -6,6 +6,7 @@ import { QWEN_REALTIME_MODEL, qwenSessionConfig } from '../shared/qwen-realtime.
 import { VOICE_SUMMARY_FALLBACK, VOICE_SUMMARY_THRESHOLD } from '../shared/voice-speech.ts';
 import { appFetch, appWebSocketUrl } from './api.ts';
 import { DotAvatar } from './DotAvatar.tsx';
+import { useCallCardPosition } from './useCallCardPosition.ts';
 import './voice-call.css';
 
 interface RecognitionAlternative { transcript: string }
@@ -36,6 +37,7 @@ export function VoiceCall({ dotName, appearance, snapshot, initialAudioContext, 
 }) {
   const [displayMode, setDisplayMode] = useState<'desktop' | 'mobile'>(() => window.matchMedia(MOBILE_CALL_LAYOUT_QUERY).matches ? 'mobile' : 'desktop');
   const [mobileMinimized, setMobileMinimized] = useState(false);
+  const cardPosition = useCallCardPosition(displayMode === 'desktop' || mobileMinimized);
   const [callRequestId] = useState(() => crypto.randomUUID());
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [muted, setMuted] = useState(false);
@@ -948,7 +950,7 @@ export function VoiceCall({ dotName, appearance, snapshot, initialAudioContext, 
   const accessibleCallText = <div className="voice-call-a11y" aria-live="polite" aria-atomic="true" data-testid="voice-call-transcript" data-task-status={taskStatus}>
     <span>{status}</span>{transcript && <span>你说：{transcript}</span>}{taskStatus && <span>{taskStatus}</span>}
   </div>;
-  return <section className={`voice-call-card${showMobileScreen ? ' voice-call-card-mobile' : ''}${callVariant === 'mobile-minimized' ? ' voice-call-card-mobile-minimized' : ''}`} role="dialog" aria-modal={showMobileScreen} aria-label="语音通话" data-testid="voice-call" data-variant={callVariant} data-voice-provider={voiceProvider} data-voice-model={voiceModel} data-voice-mic-state={micCaptureState} data-voice-mic-level={micLevelPercent}>
+  return <section ref={cardPosition.cardRef} style={cardPosition.style} className={`voice-call-card${showMobileScreen ? ' voice-call-card-mobile' : ''}${callVariant === 'mobile-minimized' ? ' voice-call-card-mobile-minimized' : ''}${cardPosition.dragging ? ' is-dragging' : ''}`} role="dialog" aria-modal={showMobileScreen} aria-label="语音通话" data-testid="voice-call" data-variant={callVariant} data-voice-provider={voiceProvider} data-voice-model={voiceModel} data-voice-mic-state={micCaptureState} data-voice-mic-level={micLevelPercent}>
     {showMobileScreen ? <div className="voice-call-mobile-screen" data-testid="voice-call-mobile-screen">
       <button type="button" className="voice-call-mobile-return" data-testid="voice-call-minimize" aria-label="返回聊天" title="返回聊天并保持通话" onClick={() => setMobileMinimized(true)}>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 8h14M5 8l5-5M5 8l5 5M19 16H5m14 0-5-5m5 5-5 5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
@@ -971,9 +973,12 @@ export function VoiceCall({ dotName, appearance, snapshot, initialAudioContext, 
       {accessibleCallText}
     </div> : <>
     <div className="voice-call-card-heading">
+      <div className="voice-call-card-drag-handle" data-testid="voice-call-drag-handle" role="group" tabIndex={0} aria-label="移动通话框" title="按住拖动，也可用方向键移动" {...cardPosition.handleProps}>
+      <svg className="voice-call-card-grip" viewBox="0 0 8 16" aria-hidden="true"><path d="M2 3h.01M6 3h.01M2 8h.01M6 8h.01M2 13h.01M6 13h.01" stroke="currentColor" strokeWidth="2" strokeLinecap="round" /></svg>
       <DotAvatar appearance={appearance} small className="voice-call-card-avatar" />
       <div className="voice-call-card-identity"><strong>{dotName}</strong><span className="voice-call-card-status"><i className={callError ? 'has-error' : ''} />{callError ? '通话遇到问题' : status}</span></div>
       <time className="voice-call-card-timer" data-testid="voice-call-timer">{Number(minutes)}:{seconds}</time>
+      </div>
       {callVariant === 'mobile-minimized' && <button type="button" className="voice-call-card-expand" data-testid="voice-call-restore" aria-label="返回通话" title="返回通话" onClick={() => setMobileMinimized(false)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4H4v4m0-4 6 6m6-6h4v4m0-4-6 6M4 16v4h4m-4 0 6-6m10 2v4h-4m4 0-6-6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg></button>}
     </div>
     {voiceProvider === 'volcengine' && <div className="voice-call-card-mic" data-testid="voice-call-mic-meter" data-mic-state={micCaptureState} aria-label={`麦克风输入音量 ${micLevelPercent}%`}>
