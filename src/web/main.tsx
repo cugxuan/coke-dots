@@ -7,7 +7,6 @@ import { appFetch, request } from './api.ts';
 import './base.css';
 import { ComputerView, type ComputerHandle } from './ComputerView.tsx';
 import { TaskArtifacts } from './TaskArtifacts.tsx';
-import { ReplyDownload } from './ReplyDownload.tsx';
 import { DotContextPanel } from './DotContextPanel.tsx';
 import { SlackSetupModal } from './SlackSetupModal.tsx';
 import { DingTalkSetupModal } from './DingTalkSetupModal.tsx';
@@ -537,7 +536,6 @@ function App() {
                 <div>
                   <div className="message-name">{item.entry.kind === 'user' ? '你' : item.entry.kind === 'dot' ? state.profile.name : '系统'}</div>
                   <MessageBody body={item.entry.body} onOpenPage={id => openPage(id, item.entry.taskId)} />
-                  {item.entry.kind === 'dot' && item.entry.body.trim() && <ReplyDownload body={item.entry.body} title={item.entry.taskId ? taskById.get(item.entry.taskId)?.title : undefined} />}
                   {Boolean(item.entry.attachments?.length) && <ul className="message-attachments" data-testid="message-attachments" aria-label="附加文件">{item.entry.attachments!.map(attachment => <li key={attachment.id}><span aria-hidden="true">▤</span><span>{attachment.name}</span></li>)}</ul>}
                   <MessageTimestamp value={item.entry.createdAt} />
                 </div>

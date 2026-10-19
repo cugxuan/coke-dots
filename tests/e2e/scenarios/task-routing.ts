@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
 import type { UiScenarioContext } from '../ui.e2e.ts';
 import type { ChatMessageResult, Task } from '../../../src/shared/types.ts';
 
@@ -39,12 +38,6 @@ export async function chatTaskRouting(ctx: UiScenarioContext) {
   assert.equal(implicit.task.id, original.id);
   assert.equal(implicit.routing, 'continued');
   await page.getByText('渠道清单：A 已核验；B 尚未查询。沿用比亚迪报告，没有重跑调研。', { exact: true }).waitFor();
-  const reply = page.locator('.timeline .message.dot').filter({ hasText: '渠道清单：A 已核验；B 尚未查询。沿用比亚迪报告，没有重跑调研。' });
-  const downloadPromise = page.waitForEvent('download');
-  await reply.getByTestId('download-reply').click();
-  const download = await downloadPromise;
-  assert.equal(download.suggestedFilename(), `${initial}-回复.md`);
-  assert.equal(await readFile((await download.path())!, 'utf8'), '渠道清单：A 已核验；B 尚未查询。沿用比亚迪报告，没有重跑调研。');
   assert.equal((await getTasks()).length, beforeCount);
   const lastPrompt = ctx.mockModelPrompts.at(-1)!;
   assert.match(lastPrompt, /Continuation of the SAME task/);

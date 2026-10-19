@@ -444,13 +444,6 @@ try {
   const fileDownload = await fileDownloadPromise;
   assert.equal(fileDownload.suggestedFilename(), 'tetris.html');
   assert.equal(await readFile((await fileDownload.path())!, 'utf8'), taskArtifactBodies.get(created.task.id)!.get('tetris.html'));
-  const reply = page.locator('.timeline .message.dot').filter({ hasText: '俄罗斯方块已创建' });
-  const replyBody = await reply.locator('.message-body').innerText();
-  const replyDownloadPromise = page.waitForEvent('download');
-  await reply.getByTestId('download-reply').click();
-  const replyDownload = await replyDownloadPromise;
-  assert.match(replyDownload.suggestedFilename(), /-回复\.md$/);
-  assert.equal(await readFile((await replyDownload.path())!, 'utf8'), replyBody, 'Downloaded Markdown must contain the complete displayed reply');
   await page.reload();
   await page.getByTestId('computer-split').waitFor();
   await mainHtml.waitFor();
@@ -597,7 +590,7 @@ try {
   await betaPage.screenshot({ path: join(artifacts, '07-beta-isolated-desktop.png') });
   await betaContext.close();
   await alphaContext.close();
-  console.log(JSON.stringify({ result: 'passed', checks: ['chat and computer split with retained composer', 'first screen click coordinates and delayed noVNC keyboard focus', 'cancelled and rejected takeover send no desktop input', 'stale polling cannot undo takeover', 'outside clicks including other iframes return control and close noVNC', 'chat submission retains the computer pane', 'cloud screenshot', 'local permission independence', 'recoverable browser-context status and error code', 'authenticated noVNC WebSocket proxy', 'takeover browser navigation/click/type', 'return control', 'remote Agent kernel dispatch', 'computer takeover pauses the active task and Chrome resumes it after control returns', 'main conversation file and Markdown reply downloads with exact bytes', 'failed follow-up preserves Chinese CSV downloads and refreshes one file list', 'chat artifact list and iframe preview with linked assets', 'sandboxed HTML preview headers', 'one-click cloud-browser artifact open and return control', 'cross-tenant artifact read/download/open denial', 'tenant token and runtime separation'], artifacts }, null, 2));
+  console.log(JSON.stringify({ result: 'passed', checks: ['chat and computer split with retained composer', 'first screen click coordinates and delayed noVNC keyboard focus', 'cancelled and rejected takeover send no desktop input', 'stale polling cannot undo takeover', 'outside clicks including other iframes return control and close noVNC', 'chat submission retains the computer pane', 'cloud screenshot', 'local permission independence', 'recoverable browser-context status and error code', 'authenticated noVNC WebSocket proxy', 'takeover browser navigation/click/type', 'return control', 'remote Agent kernel dispatch', 'computer takeover pauses the active task and Chrome resumes it after control returns', 'main conversation file downloads with exact bytes', 'failed follow-up preserves Chinese CSV downloads and refreshes one file list', 'chat artifact list and iframe preview with linked assets', 'sandboxed HTML preview headers', 'one-click cloud-browser artifact open and return control', 'cross-tenant artifact read/download/open denial', 'tenant token and runtime separation'], artifacts }, null, 2));
 } catch (error) {
   if (page) await page.screenshot({ path: join(artifacts, 'failure.png'), fullPage: true }).catch(() => undefined);
   throw new Error(`${error instanceof Error ? error.message : String(error)}\n${logs.join('')}`);
