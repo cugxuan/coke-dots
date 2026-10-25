@@ -506,14 +506,14 @@ test('Scratchpad write rules enforce no-ask, explicit-request, and hand-off mode
     void worker.tick();
     await waitFor(() => store.getTask(noAskTask.id, user.tenant.id)?.status === 'done');
     assert.equal(store.tenantPages(user.tenant.id).length, 1, 'The no-ask mode did not perform its supported page write');
-    assert.match(prompts[0], /Take the Scratchpad page action without asking again/);
+    assert.match(prompts[0], /无需再次询问即可执行 Scratchpad 页面操作/);
 
     store.saveTenantActionRule(user.tenant.id, user.user.id, 'Create a page only if directly requested.', 'when-requested');
     const explicitTask = store.createTask('E2E permission mode two', null, 'model', user.tenant.id);
     void worker.tick();
     await waitFor(() => store.getTask(explicitTask.id, user.tenant.id)?.status === 'waiting');
     assert.equal(store.tenantPages(user.tenant.id).length, 1, 'A non-explicit page write bypassed the runtime check');
-    assert.match(prompts[1], /only when the user explicitly requests that action/);
+    assert.match(prompts[1], /只有当前任务明确要求相应动作时/);
     assert.ok(store.snapshot(false, [], { baseUrl: '', model: '', hasKey: false, adminTenantId: null, apiKeyStatus: 'missing' }, user.tenant.id).entries.some(entry => entry.taskId === explicitTask.id && /明确要求/.test(entry.body)));
 
     store.saveTenantActionRule(user.tenant.id, user.user.id, 'Hand over page changes for manual editing.', 'hand-off');
@@ -521,7 +521,7 @@ test('Scratchpad write rules enforce no-ask, explicit-request, and hand-off mode
     void worker.tick();
     await waitFor(() => store.getTask(handoffTask.id, user.tenant.id)?.status === 'waiting');
     assert.equal(store.tenantPages(user.tenant.id).length, 1, 'A hand-off rule allowed the agent page write');
-    assert.match(prompts[2], /Do not use pageAction/);
+    assert.match(prompts[2], /不得使用 pageAction/);
     assert.ok(store.snapshot(false, [], { baseUrl: '', model: '', hasKey: false, adminTenantId: null, apiKeyStatus: 'missing' }, user.tenant.id).entries.some(entry => entry.taskId === handoffTask.id && /自行创建/.test(entry.body)));
   } finally {
     worker.stop(); store.close();
@@ -566,8 +566,8 @@ test('background worker stores real model result and schedules a future run', as
     await waitFor(() => store.getTask(task.id)?.status === 'scheduled');
     const completed = store.getTask(task.id)!;
     assert.equal(completed.result, 'Checked the supplied information.');
-    assert.match(receivedPrompt, /User-approved workspace notes[\s\S]*1\. Use short Mandarin summaries\./, 'The worker failed to include the current tenant\'s approved memory');
-    assert.match(receivedPrompt, /When the user asks for automation ideas, keep them as inactive proposals and choose done; do not schedule them unless the user chooses an idea and asks to set it up with its sources, timing, and review requirements\./, 'The model prompt must keep automation brainstorming separate from active schedules');
+    assert.match(receivedPrompt, /用户确认的工作区笔记[\s\S]*1\. Use short Mandarin summaries\./, 'The worker failed to include the current tenant\'s approved memory');
+    assert.match(receivedPrompt, /仅征求自动化想法时，应作为未启用的建议并用 done，用户选定来源、时间和审阅要求后才可安排执行。/, 'The model prompt must keep automation brainstorming separate from active schedules');
     assert.ok(completed.nextRunAt && completed.nextRunAt > new Date().toISOString());
     assert.ok(store.snapshot(true).entries.some(e => e.taskId === task.id && e.kind === 'dot'));
     assert.deepEqual(notifications, [{ title: 'Dot', body: '“Check supplied information”已有新结果。' }]);

@@ -127,7 +127,7 @@ export async function createCsvDelivery(cwd) {
   const tool = {
     name: 'write_csv', label: '生成并校验 CSV',
     executionMode: 'sequential',
-    description: 'Write a CSV deliverable from structured headers and rows, escaping commas, quotes and newlines. Validates every row before an atomic write. Use this instead of hand-concatenating CSV text.',
+    description: '用结构化 headers 和 rows 生成 CSV 交付物，正确转义逗号、引号和换行；每行校验通过后原子写入。不要手工拼接 CSV 文本。',
     parameters: Type.Object({ path: Type.String(), headers: Type.Array(Type.String(), { minItems: 1, maxItems: 256 }), rows: Type.Array(Type.Array(scalar), { maxItems: 50_000 }) }, { additionalProperties: false }),
     async execute(_id, { path: target, headers, rows }, signal) {
       const result = await save(target, csvText(headers, rows), signal);

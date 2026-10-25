@@ -48,6 +48,8 @@ test('real Pi compacts inside a tool loop before the final response, retains evi
     assert.equal(result.message, 'fixture facts preserved');
     assert.equal(normal, 4); assert(summaries >= 1);
     assert(!requests[3].tools?.length, 'compaction must happen before asking for the final answer');
+    assert.match(requests[3].messages.find(m => m.role === 'system').content, /上下文整理助手/);
+    assert.match(JSON.stringify(requests[3].messages.find(m => m.role === 'user').content), /上方对话需要整理成结构化上下文摘要/);
     assert(requests.at(-1).tools?.length, 'no compaction request after the final answer');
     assert.match(JSON.stringify(requests.at(-1).messages), /Completed three reads/);
     assert(requests.every(request => request.max_tokens <= 8192));

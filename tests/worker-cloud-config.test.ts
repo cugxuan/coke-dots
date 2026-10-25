@@ -206,9 +206,9 @@ test('cloud Pi dispatch enables direct file and browser tools without a separate
     }
     assert.equal(store.getTask(task.id, account.tenant.id)?.status, 'done');
     assert.equal(receivedEngine, 'pi');
-    assert.match(receivedPrompt, /standard coding tools available: read, grep, find, ls, write, edit, and bash/);
-    assert.match(receivedPrompt, /Browser Use for the visible Chromium browser/);
-    assert.match(receivedPrompt, /without asking for another permission prompt/);
+    assert.match(receivedPrompt, /Pi 可使用 read、grep、find、ls、write、edit、bash/);
+    assert.match(receivedPrompt, /操作可见 Chromium 的 Browser Use/);
+    assert.match(receivedPrompt, /无需再次请求许可/);
   } finally {
     worker.stop();
     store.close();

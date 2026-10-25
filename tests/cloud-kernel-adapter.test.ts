@@ -428,7 +428,7 @@ test('DeepSeek Harness exposes a temporary read-only DingTalk calendar tool for 
     }, { dshSdk: sdk });
     assert.equal(captured.envHasToken, false);
     assert.match(captured.plugin, /list_dingtalk_calendar_events/);
-    assert.match(captured.plugin, /Read-only/);
+    assert.match(captured.plugin, /只读/);
     assert.doesNotMatch(captured.plugin, /create_dingtalk_calendar|update_dingtalk_calendar|cancel_dingtalk_calendar/);
     assert.match(captured.plugin, new RegExp(token));
     assert.equal((await readdir(join(await realpath(task), '.coke-dots-agent-runtime', 'dsh-home'))).some(name => name.endsWith('-dingtalk-calendar.mjs')), false);

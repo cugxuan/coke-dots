@@ -12,24 +12,24 @@ const baseRequest: AgentRequest = {
 
 test('cloud-computer Pi prompt allows coding and interactive Browser Use inside the tenant Debian computer', () => {
   const prompt = formatAgentPrompt({ ...baseRequest, engine: 'pi', cloudComputerTask: true });
-  assert.match(prompt, /read, grep, find, ls, write, edit, and bash/);
-  assert.match(prompt, /Browser Use for the visible Chromium browser/);
-  assert.match(prompt, /without asking for another permission prompt/);
-  assert.match(prompt, /clone repositories, install project dependencies, run tests, and use the browser/);
-  assert.match(prompt, /do not attempt to access the Mac host, VPS, Kubernetes control plane, or another tenant/);
-  assert.match(prompt, /send, publish, authorize, pay, delete, or change account data only when the task explicitly asks/);
+  assert.match(prompt, /read、grep、find、ls、write、edit、bash/);
+  assert.match(prompt, /操作可见 Chromium 的 Browser Use/);
+  assert.match(prompt, /无需再次请求许可/);
+  assert.match(prompt, /克隆仓库，安装项目依赖，运行测试和使用浏览器/);
+  assert.match(prompt, /不得尝试访问 Mac 主机、VPS、Kubernetes 控制面或其他租户/);
+  assert.match(prompt, /只有任务明确要求相应动作时，才能发送、发布、授权、付款、删除或更改账号数据/);
 });
 
 test('non-Pi cloud kernels are not told they have Pi shell, write, or Browser Use tools', () => {
   const prompt = formatAgentPrompt({ ...baseRequest, engine: 'dsh', cloudComputerTask: true });
-  assert.match(prompt, /does not have Pi’s shell, file-write, or interactive Browser Use tools/);
-  assert.doesNotMatch(prompt, /standard coding tools available/);
+  assert.match(prompt, /没有 Pi 的 shell、文件写入或交互式 Browser Use 工具/);
+  assert.doesNotMatch(prompt, /Pi 可使用 read/);
 });
 
 test('non-cloud tasks are not told they can write files', () => {
   const prompt = formatAgentPrompt(baseRequest);
-  assert.match(prompt, /no writable cloud-computer task directory/);
-  assert.doesNotMatch(prompt, /without asking the user for another approval/);
+  assert.match(prompt, /没有可写的云电脑任务目录/);
+  assert.doesNotMatch(prompt, /无需再次请求许可/);
 });
 
 test('private Dot memory updates are explicit, user scoped, and limited to durable non-sensitive notes', () => {
@@ -39,10 +39,10 @@ test('private Dot memory updates are explicit, user scoped, and limited to durab
     dotMemories: [{ id: memoryId, note: 'Prefer concise Mandarin answers.' }],
     allowDotMemoryUpdates: true,
   });
-  assert.match(prompt, /Private notes for this Dot and the initiating user only/);
+  assert.match(prompt, /仅属于此 Dot 和发起用户的私人笔记/);
   assert.match(prompt, new RegExp(`ID: ${memoryId}`));
-  assert.match(prompt, /durable preference, decision, or ongoing responsibility/);
-  assert.match(prompt, /Do not save one-off task details, incident payloads, copied source text, secrets, API keys, OAuth codes, passwords, access tokens, or sensitive personal data/i);
+  assert.match(prompt, /持久的偏好、决定、长期责任/);
+  assert.match(prompt, /不得保存一次性任务细节、事故载荷、复制的来源正文、秘密、API 密钥、OAuth 代码、密码、访问令牌或敏感个人资料/i);
 
   const saved = parseDecision(JSON.stringify({ status: 'done', message: '已记住。', memoryAction: { action: 'save', note: 'Prefer concise Mandarin answers.' } }), undefined, { allowDotMemoryUpdates: true, dotMemoryIds: [] });
   assert.deepEqual(saved.memoryAction, { action: 'save', note: 'Prefer concise Mandarin answers.' });

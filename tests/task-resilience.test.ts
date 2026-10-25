@@ -101,9 +101,9 @@ test('partial aggregation does not resume a paused parent or bypass a paused chi
 
 test('research instructions distinguish engine capabilities and preserve source failures as evidence', () => {
   const prompt = formatAgentPrompt({ prompt: 'Research', priorResult: null, sessionId: null, workspace: '/task', onEvent: () => {}, allowDelegation: true, availableEngines: ['model', 'pi'], engine: 'pi', cloudComputerTask: true });
-  assert.match(prompt, /model has no live web, browser, shell or file-write tools/);
-  assert.match(prompt, /Do not assign browser research to model/);
-  assert.match(prompt, /Save verified findings incrementally/);
-  assert.match(prompt, /failed or unqueried sources, coverage limits and manual follow-up/);
-  assert.match(prompt, /do not bypass access controls or user cancellation/);
+  assert.match(prompt, /model 没有实时网页、浏览器、shell 或文件写入工具/);
+  assert.match(prompt, /不得把浏览器研究交给 model/);
+  assert.match(prompt, /逐步保存已核实发现/);
+  assert.match(prompt, /失败或未查询的来源、覆盖限制和人工跟进项/);
+  assert.match(prompt, /不得绕过访问控制或用户取消/);
 });

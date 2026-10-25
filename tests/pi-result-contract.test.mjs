@@ -53,7 +53,10 @@ test('Pi sends the app result contract as a system instruction and accepts a val
   await fixture([{ text: decision() }], async ({ run, requests }) => {
     assert.equal((await run()).message, exactReply);
     assert.equal(requests.length, 1);
-    assert(requests[0].messages.some(message => message.role === 'system' && message.content.includes('Coke Dots task result protocol')));
+    assert(requests[0].messages.some(message => message.role === 'system' && message.content.includes('Coke Dots 任务结果协议')));
+    assert(requests[0].messages.some(message => message.role === 'system' && message.content.includes('你是在 Pi 运行框架内工作的任务助手')));
+    assert.match(requests[0].tools.find(tool => tool.function.name === 'read').function.description, /读取文本或图片文件/);
+    assert.match(requests[0].tools.find(tool => tool.function.name === 'read').function.parameters.properties.path.description, /待读取文件的路径/);
     assert(requests[0].messages.some(message => message.role === 'user' && JSON.stringify(message.content).includes('请只回复')));
   });
 });
@@ -175,8 +178,8 @@ test('Pi advertises the research toolkit only in an image that provides it', asy
       await fixture([{ text: decision() }], async ({ run, requests }) => {
         await run();
         const system = requests[0].messages.filter(message => message.role === 'system').map(message => message.content).join('\n');
-        assert.equal(system.includes('Preinstalled cloud-computer research tools:'), enabled === '1');
-        if (enabled === '1') assert(system.includes('pdftotext -layout') && system.includes('Do not reinstall these packages'));
+        assert.equal(system.includes('云电脑已预装的研究工具：'), enabled === '1');
+        if (enabled === '1') assert(system.includes('pdftotext -layout') && system.includes('常规研究不要重装这些包'));
       });
     }
   } finally {

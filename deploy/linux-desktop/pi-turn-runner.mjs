@@ -38,7 +38,7 @@ export function createPiTurnRunner(session, { signal, threshold, isContextOverfl
   const compact = async () => {
     checkAbort();
     try {
-      await session.compact('Preserve the user request, constraints, verified findings, artifact paths, completed tool operations and remaining work. Clearly distinguish completed actions from pending actions; do not repeat completed side effects.');
+      await session.compact('用中文整理上下文，代码标识符和必要原文保持原样。保留用户请求、约束、已核实发现、产物路径、已完成工具操作和剩余工作，明确区分已做与待做；不要重复已完成的副作用。');
     } catch (error) {
       checkAbort();
       throw new Error(`上下文整理失败；已保留任务文件和工具记录：${error.message}`);

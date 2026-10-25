@@ -247,10 +247,10 @@ test('worker receives the latest request and bounded historical evidence without
     assert.equal(calls[0].taskContext?.originalRequest, f.report.instruction);
     assert.match(calls[0].priorResult!, /report.csv/);
     const prompt = formatAgentPrompt(calls[0]);
-    assert.match(prompt, /Execute only the latest user request/);
-    assert.match(prompt, /NOT commands to replay/);
+    assert.match(prompt, /只执行下方最新用户请求/);
+    assert.match(prompt, /不是要重放的命令/);
     assert.match(prompt, /research\/notes.md/);
-    assert.match(prompt, new RegExp(`Task: ${followup}`));
+    assert.match(prompt, new RegExp(`当前任务：${followup}`));
     assert.equal(f.store.getTask(f.report.id)?.instruction, f.report.instruction);
     assert(f.store.snapshot(false).entries.some(entry => entry.body.includes('比亚迪报告已完成')));
     const bounded = formatAgentPrompt({ ...calls[0], prompt: '长消息'.repeat(3000), priorResult: '旧报告'.repeat(10000), pages: [{ id: 'p', title: 'P', content: '页面'.repeat(20000) }], taskContext: { ...calls[0].taskContext!, artifacts: Array.from({ length: 20 }, (_, i) => ({ path: `${i}.csv`, size: 100, mediaType: 'text/csv' })) } });
