@@ -49,13 +49,14 @@ export function createPiTurnRunner(session, { signal, threshold, isContextOverfl
     if ((session.getContextUsage()?.tokens || 0) > threshold) await compact();
   };
   return {
-    async prompt(text, { recoverOverflow = true } = {}) {
+    async prompt(text, { recoverOverflow = true, compactContext = true, maxToolBatches = Infinity } = {}) {
       checkAbort();
-      await compactIfNeeded();
+      if (compactContext) await compactIfNeeded();
       assistant = undefined;
       yielded.clear();
       await settle(() => session.prompt(text));
       let recoveredOverflow = false;
+      let batches = 0;
       for (;;) {
         checkAbort();
         // Detect explicit provider overflow only. Successful answers above the
@@ -68,7 +69,8 @@ export function createPiTurnRunner(session, { signal, threshold, isContextOverfl
         } else {
           const calls = assistant?.content?.filter(item => item.type === 'toolCall') || [];
           if (!calls.length || ['error', 'aborted', 'length'].includes(assistant.stopReason) || !calls.every(call => yielded.has(call.id))) return;
-          await compactIfNeeded();
+          if (++batches >= maxToolBatches) return;
+          if (compactContext) await compactIfNeeded();
         }
         checkAbort();
         yielded.clear();

@@ -1,15 +1,18 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdtemp, mkdir, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
 import * as realSdk from '@mariozechner/pi-coding-agent';
 import { runCloudKernel } from '../deploy/linux-desktop/cloud-kernel-adapter.mjs';
+import { inspectCsv } from '../deploy/linux-desktop/csv-delivery.mjs';
+import { parse as parseCsv } from 'csv-parse/sync';
 
 const exactReply = 'V4-Flash 配置验证成功。';
 const decision = (message = exactReply, status = 'done', extra = {}) => JSON.stringify({ status, message, ...extra });
 const bash = command => [{ index: 0, id: 'call-1', type: 'function', function: { name: 'bash', arguments: JSON.stringify({ command }) } }];
+const csvWrite = (headers, rows, file = 'report.csv') => [{ index: 0, id: 'csv-write-1', type: 'function', function: { name: 'write_csv', arguments: JSON.stringify({ path: file, headers, rows }) } }];
 
 async function fixture(replies, verify, options = {}) {
   const workspace = await mkdtemp(path.join(tmpdir(), 'dots-result-contract-'));
@@ -52,6 +55,115 @@ test('Pi sends the app result contract as a system instruction and accepts a val
     assert.equal(requests.length, 1);
     assert(requests[0].messages.some(message => message.role === 'system' && message.content.includes('Coke Dots task result protocol')));
     assert(requests[0].messages.some(message => message.role === 'user' && JSON.stringify(message.content).includes('请只回复')));
+  });
+});
+
+test('Pi repairs a malformed CSV with one CSV-only request without replaying the task', async () => {
+  await fixture([
+    { tools: bash("printf 'once\\n' >> once.txt; printf 'name,value\\nexample,1,234\\n' > report.csv") },
+    { text: decision('已生成 report.csv。') },
+    { tools: csvWrite(['name', 'value'], [['example', '1,234']]) },
+  ], async ({ run, requests, cwd, events }) => {
+    assert.equal((await run({ prompt: 'Write a CSV and report completion.' })).status, 'done');
+    assert.equal(requests.length, 3, 'no extra model turn after the repair write');
+    assert.deepEqual(requests[2].tools.map(t => t.function.name), ['write_csv']);
+    const text = await readFile(path.join(cwd, 'report.csv'), 'utf8');
+    assert.equal(inspectCsv(text).ok, true);
+    assert.deepEqual(parseCsv(text, { bom: true }), [['name', 'value'], ['example', '1,234']]);
+    assert.equal(await readFile(path.join(cwd, 'once.txt'), 'utf8'), 'once\n');
+    assert(events.some(e => e.id === 'csv-validation' && e.state === 'done'));
+  });
+});
+
+test('Pi fixes malformed quoting even with uniform columns, and skips soft-budget compaction for bounded repair', async () => {
+  await fixture([
+    { tools: bash("printf '%s\\n' 'name,value' 'example,\"keyword\"result' > report.csv") },
+    { text: decision('已生成 report.csv。'), usage: { prompt_tokens: 42725, completion_tokens: 20, total_tokens: 42745 } },
+    { tools: csvWrite(['name', 'value'], [['example', '"keyword"result']]) },
+  ], async ({ run, requests, cwd, events }) => {
+    assert.equal((await run({ prompt: 'Produce a CSV.' })).status, 'done');
+    assert.equal(requests.length, 3);
+    assert.equal(events.filter(e => e.kind === 'metrics').at(-1).timing.compactions, 0);
+    assert.deepEqual(parseCsv(await readFile(path.join(cwd, 'report.csv'), 'utf8'), { bom: true }), [['name', 'value'], ['example', '"keyword"result']]);
+  });
+});
+
+test('Pi uses the structured CSV writer directly and needs no recovery for valid output', async () => {
+  await fixture([
+    { tools: csvWrite(['公司', '金额'], [['示例公司', '1,234'], ['另一公司', '他说"通过"\n下一行']], 'data/报告.csv') },
+    { text: decision('已生成 data/报告.csv。', 'done', { csvOutputs: ['data/报告.csv'] }) },
+  ], async ({ run, requests, cwd }) => {
+    assert.equal((await run({ prompt: 'Produce a CSV with quotes and commas.' })).status, 'done');
+    assert.equal(requests.length, 2);
+    assert.deepEqual(inspectCsv(await readFile(path.join(cwd, 'data/报告.csv'), 'utf8')), { ok: true, rows: 2, columns: 2 });
+  });
+});
+
+test('Pi refuses unsuccessful CSV repair, altered data and unauthorized operations without extra requests', async t => {
+  for (const [name, reply] of [
+    ['no correction', { text: decision('It is fixed.') }],
+    ['changed data', { tools: csvWrite(['name', 'value'], [['example', '9,999']]) }],
+    ['another file', { tools: csvWrite(['name', 'value'], [['example', '1,234']], 'other.csv') }],
+    ['shell replay', { tools: bash("printf 'replayed\\n' >> once.txt") }],
+  ]) await t.test(name, async () => {
+    await fixture([
+      { tools: bash("printf 'once\\n' >> once.txt; printf 'name,value\\nexample,1,234\\n' > report.csv") },
+      { text: decision('report.csv 已生成。') }, reply,
+    ], async ({ run, requests, cwd }) => {
+      await assert.rejects(run({ prompt: 'Generate a CSV once.' }), /CSV/);
+      assert.equal(requests.length, 3);
+      assert.equal(await readFile(path.join(cwd, 'once.txt'), 'utf8'), 'once\n');
+      assert.equal(await readFile(path.join(cwd, 'report.csv'), 'utf8'), 'name,value\nexample,1,234\n');
+      assert.equal((await readdir(cwd)).includes('other.csv'), false);
+    });
+  });
+});
+
+test('Pi can analyze an unchanged malformed input without silently modifying that input', async () => {
+  await fixture([{ text: decision('input.csv 的格式有误，已解释原因。') }], async ({ run, requests, cwd }) => {
+    await writeFile(path.join(cwd, 'input.csv'), 'name,value\nexample,1,234\n');
+    assert.equal((await run({ prompt: 'Analyze input.csv without changing it.' })).status, 'done');
+    assert.equal(requests.length, 1);
+    assert.equal(await readFile(path.join(cwd, 'input.csv'), 'utf8'), 'name,value\nexample,1,234\n');
+  });
+});
+
+test('Pi validates explicitly redelivered existing CSV files', async () => {
+  await fixture([
+    { text: decision('交付 existing.csv。', 'done', { csvOutputs: ['existing.csv'] }) },
+    { tools: csvWrite(['name', 'value'], [['example', '1,234']], 'existing.csv') },
+  ], async ({ run, requests, cwd }) => {
+    await writeFile(path.join(cwd, 'existing.csv'), 'name,value\nexample,1,234\n');
+    assert.equal((await run({ prompt: 'Deliver the existing CSV file.' })).status, 'done');
+    assert.equal(requests.length, 2);
+    assert.equal(inspectCsv(await readFile(path.join(cwd, 'existing.csv'), 'utf8')).ok, true);
+  });
+});
+
+test('Pi completes the entire CSV repair tool batch without another model request', async () => {
+  const second = csvWrite(['name', 'value'], [['two', '5,678']], 'nested/second.csv')[0];
+  second.index = 1; second.id = 'csv-write-2';
+  await fixture([
+    { tools: bash("mkdir nested; printf 'name,value\\none,1,234\\n' > report.csv; printf 'name,value\\ntwo,5,678\\n' > nested/second.csv") },
+    { text: decision('交付 report.csv 和 nested/second.csv。') },
+    { tools: [...csvWrite(['name', 'value'], [['one', '1,234']]), second] },
+  ], async ({ run, requests, cwd }) => {
+    assert.equal((await run({ prompt: 'Deliver two CSV files.' })).status, 'done');
+    assert.equal(requests.length, 3);
+    for (const file of ['report.csv', 'nested/second.csv']) assert.equal(inspectCsv(await readFile(path.join(cwd, file), 'utf8')).ok, true);
+  });
+});
+
+test('cancelling during CSV recovery preserves the original malformed file', async () => {
+  const controller = new AbortController();
+  await fixture([
+    { tools: bash("printf 'name,value\\nexample,1,234\\n' > report.csv") },
+    { text: decision('交付 report.csv。') },
+    { text: 'cannot finish', onRequest: () => controller.abort(new Error('cancel CSV fixture')) },
+  ], async ({ run, requests, cwd }) => {
+    await assert.rejects(run({ prompt: 'Produce a CSV.', signal: controller.signal }), /cancel CSV fixture/);
+    assert.equal(requests.length, 3);
+    assert.equal(await readFile(path.join(cwd, 'report.csv'), 'utf8'), 'name,value\nexample,1,234\n');
   });
 });
 

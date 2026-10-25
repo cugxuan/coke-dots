@@ -48,7 +48,7 @@ test('Pi cloud kernel enables the full coding toolset and keeps runtime secrets 
     assert.equal(output.sessionId, 'pi-cloud-session');
     assert.equal(runtimeKey, modelConfig.apiKey, 'Pi receives the shared credential through in-memory AuthStorage');
     assert.equal(Boolean(process.env.DEEPSEEK_API_KEY?.includes(modelConfig.apiKey)), false, 'The API key is not added to the cloud adapter process environment');
-    assert.deepEqual(capturedOptions.value?.tools, ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls', 'set_reasoning']);
+    assert.deepEqual(capturedOptions.value?.tools, ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls', 'write_csv', 'set_reasoning']);
     assert.equal(capturedOptions.value?.customTools.some((tool: { name: string }) => tool.name === 'bash'), true, 'Pi Bash is enabled in the cloud computer');
     assert(bashSpawnHook);
     const childEnvironment = bashSpawnHook({ command: '/bin/true', args: [], cwd: task, env: {
@@ -218,7 +218,7 @@ test('Pi public-page lookup remains available alongside the full tenant-computer
     ModelRegistry: { inMemory: () => ({ registerProvider: () => undefined, find: () => ({ id: modelConfig.model }) }) },
     SessionManager: { list: async () => [], create: () => ({ appendMessage: () => '', getEntries: () => [], getSessionFile: () => undefined, getSessionId: () => 'pi-session' }), open: () => { throw new Error('unexpected'); } },
     createAgentSession: async (options: Record<string, any>) => {
-      assert.deepEqual(options.tools, ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls', 'set_reasoning', 'open_public_page']);
+      assert.deepEqual(options.tools, ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls', 'write_csv', 'set_reasoning', 'open_public_page']);
       toolResult = await options.customTools.find((tool: { name: string }) => tool.name === 'open_public_page').execute('call-1', { url: 'https://example.test/' });
       return { session: { messages: [{ role: 'assistant', content: [{ type: 'text', text: decision }] }], prompt: async () => undefined, dispose: () => undefined } };
     },
@@ -298,7 +298,7 @@ test('Pi exposes only the task-scoped DingTalk document tools and keeps their gr
     ModelRegistry: { inMemory: () => ({ registerProvider: () => undefined, find: () => ({ id: modelConfig.model }) }) },
     SessionManager: { list: async () => [], create: () => ({ appendMessage: () => '', getEntries: () => [], getSessionFile: () => undefined, getSessionId: () => 'pi-dingtalk-session' }), open: () => { throw new Error('unexpected'); } },
     createAgentSession: async (options: Record<string, any>) => {
-      assert.deepEqual(options.tools, ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls', 'set_reasoning', 'search_dingtalk_documents', 'fetch_dingtalk_document', 'create_dingtalk_document']);
+      assert.deepEqual(options.tools, ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls', 'write_csv', 'set_reasoning', 'search_dingtalk_documents', 'fetch_dingtalk_document', 'create_dingtalk_document']);
       const byName = new Map(options.customTools.map((tool: { name: string }) => [tool.name, tool]));
       toolOutputs = [
         await (byName.get('search_dingtalk_documents') as any).execute('search-1', { query: '值班手册' }),
