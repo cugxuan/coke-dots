@@ -7,6 +7,11 @@ start_url="${COKE_DESKTOP_START_URL:-https://example.com}"
 chrome_bin="${COKE_DESKTOP_CHROME_BIN:-/usr/bin/chromium}"
 profile_dir="$HOME/.config/chromium"
 mkdir -p "$HOME" "$profile_dir" "$HOME/.vnc" /workspace/.coke-desktop /tmp/.X11-unix
+if [[ "${DOTS_RESEARCH_TOOLS:-0}" == "1" ]]; then
+  # A persistent workspace may contain an old root-owned ~/.npm. Use the
+  # dedicated non-root caches instead; never change ownership of user files.
+  mkdir -p "$NPM_CONFIG_CACHE" "$PIP_CACHE_DIR"
+fi
 chmod 1777 /tmp/.X11-unix
 
 # A recreated Pod mounts the prior Pod's persistent Chromium profile. Chrome's

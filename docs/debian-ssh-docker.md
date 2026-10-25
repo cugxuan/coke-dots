@@ -55,6 +55,20 @@ No cluster or image import is involved. The Docker build context is restricted b
 
 Alternatively, build/load/pull the same image onto the target host yourself and set its reference. The runtime requires the image to be installed before opening a desktop; it does not pull or rebuild images in response to user tasks. Production accepts a `sha-<40-character-revision>` tag or a registry reference pinned with `@sha256:<digest>`.
 
+### Included research tools
+
+The desktop image preinstalls PDF text extraction and rendering (`pdftotext`, `pdfinfo`, `pdftoppm`, Python `pypdf` and `pymupdf`), CSV/Excel processing (`pandas`, `openpyxl`), Word `.docx` processing (`docx`), HTML/XML parsing (`bs4`, `lxml`, `requests`), and shell utilities (`rg`, `jq`, `file`, `zip`, `unzip`, `xxd`). The Pi runtime advertises these tools so routine research uses them directly. The Debian PyMuPDF package uses `import pymupdf`; its legacy `fitz` import is not installed.
+
+`python3` and `pip` use `/opt/coke-dots/python`, a non-root virtual environment with the preinstalled system libraries. Supplementary packages can be installed there when needed. npm and pip caches live in `/workspace/.cache/npm` and `/workspace/.cache/pip`, outside task deliverables; recreating a desktop with an older root-owned `~/.npm` does not select that cache. Existing user files and cache ownership are preserved.
+
+After building, verify real PDF/Chinese text extraction, spreadsheet and Word round trips, HTML parsing, shell tools, and offline dependency installation as the image's non-root user:
+
+```sh
+bash scripts/verify-desktop-research-tools.sh coke-dots-linux-desktop:sha-<revision-from-build>
+```
+
+The check runs in an isolated disposable container with networking disabled and does not mount any live workspace. It uses the local Docker engine or the command-scoped `DOCKER_HOST` selected for the build. These tools do not provide OCR for scanned documents or access to authenticated external sites.
+
 ## 3. Configure the control plane
 
 Copy `.env.example` to `.env` if it does not already exist. Fill Google OAuth as usual and set:

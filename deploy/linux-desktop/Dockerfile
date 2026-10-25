@@ -15,16 +15,32 @@ RUN apt-get -o Acquire::Retries=5 update && apt-get -o Acquire::Retries=5 instal
     && locale-gen en_US.UTF-8 \
     && rm -rf /var/lib/apt/lists/*
 
+RUN apt-get -o Acquire::Retries=5 update && apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
+      file jq poppler-utils ripgrep unzip xxd zip python3-venv python3-bs4 python3-docx \
+      python3-lxml python3-openpyxl python3-pandas python3-pymupdf python3-pypdf python3-requests \
+    && sed -i 's/^# *\(en_US.UTF-8 UTF-8\)/\1/' /etc/locale.gen \
+    && locale-gen en_US.UTF-8 \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV PATH=/opt/coke-dots/python/bin:$PATH \
+    NPM_CONFIG_CACHE=/workspace/.cache/npm \
+    PIP_CACHE_DIR=/workspace/.cache/pip \
+    DOTS_RESEARCH_TOOLS=1
+
 RUN install -d -o node -g node /workspace /opt/coke-dots /tmp/.X11-unix \
-    && chmod 1777 /tmp/.X11-unix
+    && chmod 1777 /tmp/.X11-unix \
+    && /usr/bin/python3 -m venv --system-site-packages /opt/coke-dots/python \
+    && chown -R node:node /opt/coke-dots/python
 
 WORKDIR /opt/coke-dots
 COPY package.json package-lock.json ./
 COPY vendor/ ./vendor/
-RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
-    && npm cache clean --force \
-    && install -d -o node -g node "$HOME" "$HOME/.config" "$HOME/.vnc"
+RUN npm ci --cache /tmp/dots-build-npm-cache --omit=dev --ignore-scripts --no-audit --no-fund \
+    && rm -rf /tmp/dots-build-npm-cache \
+    && install -d -o node -g node "$HOME" "$HOME/.config" "$HOME/.vnc" /workspace/.cache /workspace/.cache/npm /workspace/.cache/pip
 RUN node --input-type=module -e "await import('@mariozechner/pi-coding-agent'); await import('@browser_use/pi'); await import('typebox')"
+RUN python3 -c "import bs4, docx, pymupdf, lxml, openpyxl, pandas, pypdf, requests" \
+    && for tool in pdftotext pdfinfo pdftoppm rg jq file unzip zip xxd; do command -v "$tool"; done
 
 COPY --chmod=0755 deploy/linux-desktop/start-desktop.sh /usr/local/bin/start-dots-desktop
 COPY --chmod=0644 deploy/linux-desktop/computer-worker.mjs /opt/coke-dots/computer-worker.mjs

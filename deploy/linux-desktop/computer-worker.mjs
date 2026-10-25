@@ -154,7 +154,7 @@ const workspace = path.resolve(process.env.DOTS_AGENT_WORKSPACE || '/workspace')
 const artifactTaskId = /^[a-f0-9-]{36}$/i;
 const maxArtifactBytes = 25 * 1024 * 1024;
 const maxArtifactCount = 100;
-const artifactExcludedDirectories = new Set(['node_modules', '__pycache__']);
+const artifactExcludedDirectories = new Set(['node_modules', '__pycache__', 'npm-cache']);
 const artifactTypes = new Map(Object.entries({
   '.html': 'text/html; charset=utf-8', '.htm': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.json': 'application/json; charset=utf-8',

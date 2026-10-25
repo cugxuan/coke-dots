@@ -38,6 +38,10 @@ test('cloud computer exposes task files safely through its authenticated worker'
   for (let index = 0; index < 120; index += 1) {
     await writeFile(join(taskDirectory, 'node_modules', 'pdfjs-dist', `dependency-${index}.js`), 'export {};');
   }
+  await mkdir(join(taskDirectory, 'npm-cache', '_cacache'), { recursive: true });
+  for (let index = 0; index < 120; index += 1) {
+    await writeFile(join(taskDirectory, 'npm-cache', '_cacache', `cache-${index}`), 'cache');
+  }
   await mkdir(join(taskDirectory, '__pycache__'));
   await writeFile(join(taskDirectory, '__pycache__', 'extract.pyc'), 'cache');
   await writeFile(outside, '<p>private</p>');

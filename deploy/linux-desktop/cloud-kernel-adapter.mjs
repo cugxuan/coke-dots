@@ -13,6 +13,10 @@ import { createPiTurnRunner } from './pi-turn-runner.mjs';
 const decisionStatuses = new Set(['done', 'waiting', 'scheduled', 'delegating']);
 const piTools = ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls'];
 const secretEnvironmentName = /(?:API[_-]?KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)/i;
+const researchToolGuidance = `Preinstalled cloud-computer research tools:
+Use the existing tools directly before installing dependencies or writing a custom parser. PDF: pdftotext -layout, pdfinfo and pdftoppm; Python pypdf and PyMuPDF (import pymupdf). Tables: Python csv/json, pandas and openpyxl. Word .docx: python-docx (import docx). HTML/XML: BeautifulSoup (import bs4), lxml and requests. Shell: rg, jq, file, unzip, zip and xxd.
+python3 and pip already use a writable virtual environment with these libraries. npm and pip have writable caches outside task deliverables. Do not reinstall these packages or probe for sudo/pip/apt before routine research. Install additional dependencies only when an actual missing capability requires them; keep dependency caches out of the task directory.
+For long documents, extract text once into task files and use rg or page/line ranges to read relevant sections instead of dumping the entire document into the conversation. Preserve the existing browser and tenant permission rules; these libraries do not grant access to authenticated sites.`;
 const taskResultContract = `Coke Dots task result protocol:
 Your final response is consumed by the application, which displays only its message field to the user. Always finish with one JSON object containing status and a nonempty message. This envelope is internal transport, not a tool call or a user file. If the user requests an exact reply, plain text, or no tools, put that exact reply in message and still return the JSON envelope.
 Use status "done" only for completed work or a completed answer; "waiting" when blocked, missing a capability, or needing user input; "scheduled" for an explicitly requested ongoing check; "delegating" only when delegation is permitted for this run. Keep the task's permission rules for optional nextMinutes, delegations, pageAction and memoryAction. Never claim actions were performed without evidence. Omit unused fields.
@@ -99,7 +103,7 @@ async function runPi(input, cwd, config, injectedSdk) {
   const settingsManager = sdk.SettingsManager?.inMemory(cloudSessionSettings);
   const ResourceLoader = sdk.DefaultResourceLoader || (await import('@mariozechner/pi-coding-agent')).DefaultResourceLoader;
   const resourceLoader = new ResourceLoader({ cwd, agentDir, settingsManager,
-    appendSystemPromptOverride: base => [...base, taskResultContract] });
+    appendSystemPromptOverride: base => [...base, taskResultContract, ...(process.env.DOTS_RESEARCH_TOOLS === '1' ? [researchToolGuidance] : [])] });
   await resourceLoader.reload();
   const { session } = await sdk.createAgentSession({
     cwd,

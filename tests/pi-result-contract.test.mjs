@@ -55,6 +55,24 @@ test('Pi sends the app result contract as a system instruction and accepts a val
   });
 });
 
+test('Pi advertises the research toolkit only in an image that provides it', async () => {
+  const previous = process.env.DOTS_RESEARCH_TOOLS;
+  try {
+    for (const enabled of ['0', '1']) {
+      process.env.DOTS_RESEARCH_TOOLS = enabled;
+      await fixture([{ text: decision() }], async ({ run, requests }) => {
+        await run();
+        const system = requests[0].messages.filter(message => message.role === 'system').map(message => message.content).join('\n');
+        assert.equal(system.includes('Preinstalled cloud-computer research tools:'), enabled === '1');
+        if (enabled === '1') assert(system.includes('pdftotext -layout') && system.includes('Do not reinstall these packages'));
+      });
+    }
+  } finally {
+    if (previous === undefined) delete process.env.DOTS_RESEARCH_TOOLS;
+    else process.env.DOTS_RESEARCH_TOOLS = previous;
+  }
+});
+
 test('Pi accepts a successful answer above the soft budget without compacting or replaying it', async () => {
   await fixture([
     { tools: bash("printf 'saved once\\n' >> completed.txt; printf 'evidence %.0s' {1..12000}") },
