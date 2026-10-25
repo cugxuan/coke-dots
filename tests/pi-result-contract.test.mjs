@@ -54,6 +54,7 @@ test('Pi sends the app result contract as a system instruction and accepts a val
     assert.equal((await run()).message, exactReply);
     assert.equal(requests.length, 1);
     assert(requests[0].messages.some(message => message.role === 'system' && message.content.includes('Coke Dots 任务结果协议')));
+    assert(requests[0].messages.some(message => message.role === 'system' && message.content.includes('工具调用前的 assistant text 也会显示给用户')));
     assert(requests[0].messages.some(message => message.role === 'system' && message.content.includes('你是在 Pi 运行框架内工作的任务助手')));
     assert.match(requests[0].tools.find(tool => tool.function.name === 'read').function.description, /读取文本或图片文件/);
     assert.match(requests[0].tools.find(tool => tool.function.name === 'read').function.parameters.properties.path.description, /待读取文件的路径/);
