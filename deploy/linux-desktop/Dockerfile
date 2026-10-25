@@ -49,6 +49,7 @@ COPY --chmod=0644 deploy/linux-desktop/renderer-health.mjs /opt/coke-dots/render
 COPY --chmod=0644 deploy/linux-desktop/agent-runtime.mjs /opt/coke-dots/agent-runtime.mjs
 COPY --chmod=0644 deploy/linux-desktop/agent-progress.mjs /opt/coke-dots/agent-progress.mjs
 COPY --chmod=0644 deploy/linux-desktop/cloud-kernel-adapter.mjs /opt/coke-dots/cloud-kernel-adapter.mjs
+COPY --chmod=0644 deploy/linux-desktop/task-source-scope.mjs /opt/coke-dots/task-source-scope.mjs
 COPY --chmod=0644 deploy/linux-desktop/task-delegation.mjs /opt/coke-dots/task-delegation.mjs
 COPY --chmod=0644 deploy/linux-desktop/pi-turn-runner.mjs /opt/coke-dots/pi-turn-runner.mjs
 COPY --chmod=0644 deploy/linux-desktop/csv-delivery.mjs /opt/coke-dots/csv-delivery.mjs

@@ -1,0 +1,9 @@
+# Research source scope and execution limit
+
+User-specified channels define the research scope unless the user explicitly asks for broader coverage or gives them as examples. A purpose such as credit assessment does not silently expand a CSRC/exchange collection task into ratings, bank-market, recalls and litigation research. The shared instruction lives in `deploy/linux-desktop/task-source-scope.mjs` and is included in the control-plane prompt and installed Pi system contract. DSH receives it through the formatted task prompt.
+
+The instruction permits relevant directly linked announcements/attachments and official document hosts, and search engines for locating those original sources. Existing browser tabs do not authorize unrelated research. Positive/negative/neutral categories are labels, not quotas. After a failed retrieval and at most one materially different route within scope, the agent records coverage gaps and completes the requested deliverable once the requested channels have been processed. Suggested extra work stays in follow-ups.
+
+This is a model instruction, not a network domain firewall: Pi retains its general browser and shell capabilities. A static domain allowlist would also block valid document/CDN redirects and does not capture the user's purpose. Assess behavior from the actual tool trace and output, not prompt text alone.
+
+The desktop execution limit is 20 minutes; the control-plane request limit derives from it with a one-minute margin (21 minutes). Cancellation, takeover, partial-file preservation and the two-second shutdown grace are unchanged. Individual browser/provider timeouts remain separate. This change does not add deadline notifications or guarantee a completion time.
