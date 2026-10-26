@@ -1,11 +1,20 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { searchSse } from '../deploy/linux-desktop/sse-search.mjs';
 
 const item = (title = '<em>比亚迪</em>公告', url = '/disclosure/sample.pdf') => ({ title, createTime: '2026-10-26', extend: [
   { name: 'CURL', value: url }, { name: 'GSJC', value: '比亚迪' }, { name: 'ZQDM', value: '002594' },
 ] });
 const payload = rows => ({ code: '0', data: { totalSize: 5000, knowledgeList: rows } });
+
+test('SSE CLI exposes offline usage for Agent discovery', () => {
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL('../deploy/linux-desktop/sse-search.mjs', import.meta.url)), '--help'], { encoding: 'utf8' });
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /--keyword/);
+  assert.match(result.stdout, /--page 0/);
+});
 
 test('SSE search sends the effective keyword field and returns usable source metadata', async () => {
   let calls = 0;

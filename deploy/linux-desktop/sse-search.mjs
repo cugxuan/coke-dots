@@ -50,9 +50,13 @@ export async function searchSse({ keyword, page = 0, limit = 10, mode = 'precise
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    const { values } = parseArgs({ options: { keyword: { type: 'string' }, page: { type: 'string' }, limit: { type: 'string' }, mode: { type: 'string' }, sort: { type: 'string' } } });
-    const result = await searchSse({ ...values, page: values.page === undefined ? 0 : Number(values.page), limit: values.limit === undefined ? 10 : Number(values.limit) });
-    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    const { values } = parseArgs({ options: { keyword: { type: 'string' }, page: { type: 'string' }, limit: { type: 'string' }, mode: { type: 'string' }, sort: { type: 'string' }, help: { type: 'boolean', short: 'h' } } });
+    if (values.help) {
+      process.stdout.write('用法：node /opt/coke-dots/sse-search.mjs --keyword "查询词" [--page 0] [--limit 10] [--mode precise|fuzzy|preciseMulti] [--sort score|create_time]\n页码从 0 开始，最多返回 50 条。只查询上交所公开搜索目录，相关正文仍须另行核验。\n');
+    } else {
+      const result = await searchSse({ ...values, page: values.page === undefined ? 0 : Number(values.page), limit: values.limit === undefined ? 10 : Number(values.limit) });
+      process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    }
   } catch (error) {
     process.stderr.write(`${error.message}\n`);
     process.exitCode = 1;
