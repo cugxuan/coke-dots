@@ -75,7 +75,7 @@ test('real Browser Use executor batches observed actions, keeps tabs/login, reje
     assert.equal(context.pages().length, 1);
     assert.equal(context.pages()[0].url(), 'about:blank');
     assert.equal(context.browser().isConnected(), true, 'Close-all must not exit Chromium');
-    const waiting = executor.tool.execute('takeover', { code: 'await new Promise(resolve => setTimeout(resolve, 15000)); await ui.open("https://example.invalid");' });
+    const waiting = executor.tool.execute('takeover', { code: 'await new Promise(resolve => setTimeout(resolve, 15000)); await ui.open("https://example.invalid");', waitReason: 'Fixture explicitly requests a timed observation to verify cancellation.' });
     const began = Date.now();
     const handoff = setTimeout(() => { owner = 'user'; }, 400);
     await assert.rejects(waiting, /controls|cancel|abort|execution/i);
@@ -99,6 +99,10 @@ test('real Browser Use executor batches observed actions, keeps tabs/login, reje
     const hitsBeforeInvalid = asyncHits.length;
     await assert.rejects(executor.tool.execute('invalid-wait', { code: `await ui.click(asyncButton, {waitFor: {state: 'visible'}});` }), /Specify/);
     assert.equal(asyncHits.length, hitsBeforeInvalid, 'Invalid wait conditions must fail before the action');
+    await assert.rejects(executor.tool.execute('fixed-page-wait', { code: 'var p=await ui.page(); await p.waitForTimeout(3000);' }), /Fixed browser delays/);
+    await assert.rejects(executor.tool.execute('fixed-cell-wait', { code: 'await new Promise(r=>setTimeout(r,3000));' }), /Fixed browser delays/);
+    await executor.tool.execute('explicit-timed-observation', { code: 'var p=await ui.page(); await p.waitForTimeout(200);', waitReason: 'The user explicitly requests a 200ms observation interval.' });
+    await assert.rejects(executor.tool.execute('exception-does-not-leak', { code: 'await new Promise(r=>setTimeout(r,3000));' }), /Fixed browser delays/);
     const secret = await run('console.log("private-worker-token"); console.log(Object.keys(process.env));');
     assert.doesNotMatch(secret.content[0].text, /private-worker-token/);
   } finally {

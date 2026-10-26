@@ -10,6 +10,14 @@ var ui = await (async () => {
   let observation;
   let sequence = 0;
   let pageWaitMs = 0;
+  let fixedWaitReason = '';
+  const nativeSetTimeout = setTimeout;
+  const fixedWaitError = () => new Error('Fixed browser delays are disabled for page readiness. Use ui.waitFor({text|selector}) or an action with {waitFor:{text|selector}}. The action may already have happened; inspect before continuing. Supply waitReason only when the user explicitly requested a timed observation.');
+  // Shadow only the cell's timer, not Node/Playwright's internal event waits.
+  setTimeout = (callback, milliseconds, ...args) => {
+    if (Number(milliseconds) >= 200 && !fixedWaitReason) throw fixedWaitError();
+    return nativeSetTimeout(callback, milliseconds, ...args);
+  };
   const marker = `dots-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const interactive = new Set(['button', 'link', 'textbox', 'searchbox', 'combobox', 'checkbox', 'radio', 'tab', 'menuitem', 'option', 'slider', 'spinbutton']);
   async function current() {
@@ -18,7 +26,13 @@ var ui = await (async () => {
       const session = await candidate.context().newCDPSession(candidate);
       try {
         const { targetInfo } = await session.send('Target.getTargetInfo');
-        if (targetInfo.targetId === activePage.targetId) return candidate;
+        if (targetInfo.targetId === activePage.targetId) {
+          candidate.waitForTimeout = async milliseconds => {
+            if (!fixedWaitReason) throw fixedWaitError();
+            await new Promise(resolve => nativeSetTimeout(resolve, milliseconds));
+          };
+          return candidate;
+        }
       } finally { await session.detach(); }
     }
     throw new Error('The current tab disappeared. Inspect tabs before continuing; actions were not replayed.');
@@ -98,6 +112,7 @@ var ui = await (async () => {
     try { return await operation(); } finally { pageWaitMs += performance.now() - began; }
   }
   return {
+    set fixedWaitReason(value) { fixedWaitReason = String(value || ''); },
     state,
     page: current,
     click: (id, options) => action(id, 'click', [], options),
