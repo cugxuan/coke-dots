@@ -50,14 +50,18 @@ async function fixture(replies, verify, options = {}) {
 }
 
 test('Pi sends the app result contract as a system instruction and accepts a valid exact reply in one call', async () => {
-  await fixture([{ text: decision() }], async ({ run, requests }) => {
+  await fixture([{ text: decision() }], async ({ run, requests, cwd }) => {
     assert.equal((await run()).message, exactReply);
     assert.equal(requests.length, 1);
     assert(requests[0].messages.some(message => message.role === 'system' && message.content.includes('Coke Dots 任务结果协议')));
     assert(requests[0].messages.some(message => message.role === 'system' && message.content.includes('工具调用前的 assistant text 也会显示给用户')));
-    assert(requests[0].messages.some(message => message.role === 'system' && message.content.includes('你是在 Pi 运行框架内工作的任务助手')));
-    assert.match(requests[0].tools.find(tool => tool.function.name === 'read').function.description, /读取文本或图片文件/);
-    assert.match(requests[0].tools.find(tool => tool.function.name === 'read').function.parameters.properties.path.description, /待读取文件的路径/);
+    assert(requests[0].messages.some(message => message.role === 'system' && message.content.startsWith('You are an expert coding assistant operating inside pi,')));
+    for (const factory of ['createReadTool', 'createBashTool', 'createEditTool', 'createWriteTool', 'createGrepTool', 'createFindTool', 'createLsTool']) {
+      const native = realSdk[factory](cwd);
+      const sent = requests[0].tools.find(tool => tool.function.name === native.name).function;
+      assert.equal(sent.description, native.description, `${native.name} must retain the installed SDK description`);
+      assert.deepEqual(sent.parameters, JSON.parse(JSON.stringify(native.parameters)), `${native.name} must retain the complete SDK schema, including descriptions`);
+    }
     assert(requests[0].messages.some(message => message.role === 'user' && JSON.stringify(message.content).includes('请只回复')));
   });
 });

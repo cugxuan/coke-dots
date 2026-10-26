@@ -11,7 +11,6 @@ import { parseDelegations } from './task-delegation.mjs';
 import { createPiTurnRunner } from './pi-turn-runner.mjs';
 import { createCsvDelivery, csvFailure } from './csv-delivery.mjs';
 import { taskSourceScopeInstruction } from './task-source-scope.mjs';
-import { chinesePiContext } from './pi-language.mjs';
 
 const decisionStatuses = new Set(['done', 'waiting', 'scheduled', 'delegating']);
 const piTools = ['read', 'bash', 'edit', 'write', 'grep', 'find', 'ls'];
@@ -76,7 +75,7 @@ async function runPi(input, cwd, config, injectedSdk) {
         options = { ...options, maxRetries: 0 };
       }
       if (compacting) metrics.modelStarted();
-      const stream = streamSimpleOpenAICompletions(model, chinesePiContext(context), { ...options, maxTokens: Math.min(options?.maxTokens || profile.maxTokens, profile.maxTokens) });
+      const stream = streamSimpleOpenAICompletions(model, context, { ...options, maxTokens: Math.min(options?.maxTokens || profile.maxTokens, profile.maxTokens) });
       if (compacting) void stream.result().then(message => {
         metrics.event({ type: 'message_end', message });
         report({ type: 'message_end', message });
