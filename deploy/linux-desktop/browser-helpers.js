@@ -71,10 +71,26 @@ var ui = await (async () => {
     if (!['http:', 'https:', 'about:'].includes(parsed.protocol) || parsed.username || parsed.password || (parsed.protocol === 'about:' && parsed.href !== 'about:blank')) throw new Error('Use a credential-free HTTP(S) URL or about:blank.');
     return parsed.href;
   }
-  const action = async (id, method, ...args) => {
+  function condition(value) {
+    if (value === undefined) return;
+    if (!value || typeof value !== 'object' || (!value.text && !value.selector) || (value.text && typeof value.text !== 'string') || (value.selector && typeof value.selector !== 'string')) throw new Error('Specify an observed text or selector to wait for.');
+    if (value.state && !['visible', 'hidden', 'attached', 'detached'].includes(value.state)) throw new Error('Invalid wait state');
+    if (value.timeoutMs !== undefined && !Number.isFinite(value.timeoutMs)) throw new Error('Invalid wait timeout');
+    return value;
+  }
+  async function ready(active, value) {
+    if (!value) return;
+    const { text, selector, exact = false, state: desired = 'visible', timeoutMs = 10_000 } = value;
+    let target = selector ? active.locator(selector) : active.getByText(text, { exact });
+    if (desired === 'visible') target = target.filter({ visible: true });
+    await wait(() => target.first().waitFor({ state: desired, timeout: Math.min(25_000, Math.max(1, timeoutMs)) }));
+  }
+  const action = async (id, method, args, options = {}) => {
+    const expected = condition(options.waitFor);
     const target = await locator(id);
     await target[method](...args, { timeout: 10_000 });
     sequence++;
+    if (expected) await ready(await current(), expected);
     return { action: method, id, completed: true };
   };
   async function wait(operation) {
@@ -84,27 +100,33 @@ var ui = await (async () => {
   return {
     state,
     page: current,
-    click: id => action(id, 'click'),
-    fill: (id, text) => action(id, 'fill', String(text)),
-    select: (id, value) => action(id, 'selectOption', value),
-    check: (id, checked = true) => action(id, checked ? 'check' : 'uncheck'),
-    press: async (key, id) => {
-      if (id !== undefined) return action(id, 'press', key);
+    click: (id, options) => action(id, 'click', [], options),
+    fill: (id, text, options) => action(id, 'fill', [String(text)], options),
+    select: (id, value, options) => action(id, 'selectOption', [value], options),
+    check: (id, checked = true, options) => action(id, checked ? 'check' : 'uncheck', [], options),
+    press: async (key, id, options = {}) => {
+      if (id !== undefined) return action(id, 'press', [key], options);
+      const expected = condition(options.waitFor);
       await (await current()).keyboard.press(key); sequence++;
+      if (expected) await ready(await current(), expected);
     },
-    goto: async value => {
+    goto: async (value, options = {}) => {
+      const expected = condition(options.waitFor);
       observation = undefined;
       const active = await current();
       await wait(() => active.goto(url(value), { waitUntil: 'domcontentloaded', timeout: 25_000 }));
       sequence++;
+      await ready(active, expected);
       return state();
     },
     listTabs: async () => (await browserTabs.list()).map(t => ({ id: t.targetId, url: t.url, title: t.title, active: t.targetId === activePage.targetId })),
-    open: async value => {
+    open: async (value, options = {}) => {
+      const expected = condition(options.waitFor);
       activePage = await browserTabs.open(url(value || 'about:blank'));
       page = activePage;
       observation = undefined;
       await (await current()).bringToFront(); sequence++;
+      if (expected) await ready(await current(), expected);
       return state();
     },
     switchTab: async id => {
@@ -126,15 +148,9 @@ var ui = await (async () => {
       await (await current()).bringToFront(); sequence++;
       return { closed: [...closing], tabs: await ui.listTabs() };
     },
-    waitFor: async ({ text, selector, exact = false, state: desired = 'visible', timeoutMs = 10_000 }) => {
-      if (!text && !selector) throw new Error('Specify an observed text or selector to wait for.');
-      const active = await current();
-      let target = selector ? active.locator(selector) : active.getByText(text, { exact });
-      // A text condition usually names a substring of the rendered result. Hidden
-      // duplicates must not delay an already-visible match; this only waits, never clicks.
-      if (desired === 'visible') target = target.filter({ visible: true });
-      target = target.first();
-      await wait(() => target.waitFor({ state: desired, timeout: Math.min(25_000, Math.max(1, timeoutMs)) }));
+    waitFor: async value => {
+      if (value === undefined) throw new Error('Specify an observed text or selector to wait for.');
+      await ready(await current(), condition(value));
       return state();
     },
     get sequence() { return sequence; },

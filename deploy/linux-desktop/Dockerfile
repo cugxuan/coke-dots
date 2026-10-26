@@ -53,6 +53,7 @@ COPY --chmod=0644 deploy/linux-desktop/task-source-scope.mjs /opt/coke-dots/task
 COPY --chmod=0644 deploy/linux-desktop/task-delegation.mjs /opt/coke-dots/task-delegation.mjs
 COPY --chmod=0644 deploy/linux-desktop/pi-turn-runner.mjs /opt/coke-dots/pi-turn-runner.mjs
 COPY --chmod=0644 deploy/linux-desktop/csv-delivery.mjs /opt/coke-dots/csv-delivery.mjs
+COPY --chmod=0644 deploy/linux-desktop/sse-search.mjs /opt/coke-dots/sse-search.mjs
 COPY --chmod=0644 deploy/linux-desktop/browser-executor.mjs deploy/linux-desktop/browser-helpers.js deploy/linux-desktop/model-policy.mjs deploy/linux-desktop/agent-metrics.mjs deploy/linux-desktop/agent-limits.mjs /opt/coke-dots/
 COPY --chmod=0755 deploy/linux-desktop/incident-git-credential-helper.mjs /opt/coke-dots/incident-git-credential-helper.mjs
 COPY --chmod=0644 deploy/linux-desktop/incident-git-credential-server.mjs /opt/coke-dots/incident-git-credential-server.mjs

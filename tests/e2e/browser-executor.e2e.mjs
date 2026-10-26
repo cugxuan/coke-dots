@@ -18,12 +18,22 @@ test('real Browser Use executor batches observed actions, keeps tabs/login, reje
   let owner = 'agent';
   let executor;
   const browserTimings = [];
+  const asyncHits = [];
   const server = createServer(async (req, res) => {
     if (req.url.startsWith('/v1/')) {
       assert.equal(req.headers.authorization, 'Bearer private-worker-token');
       const pages = await (await fetch(`${cdpUrl}/json/list`)).json();
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ owner, targetId: pages.find(p => p.type === 'page').id }));
+    } else if (req.url.startsWith('/async-data')) {
+      const query = new URL(req.url, 'http://fixture').searchParams;
+      asyncHits.push(query.get('kind'));
+      await new Promise(resolve => setTimeout(resolve, Number(query.get('delay'))));
+      res.writeHead(200, { 'content-type': 'text/plain' }); res.end('ready');
+    } else if (req.url.startsWith('/async')) {
+      const delay = Number(new URL(req.url, 'http://fixture').searchParams.get('delay')) || 0;
+      res.writeHead(200, { 'content-type': 'text/html' });
+      res.end(`<title>Async results</title><label>Query<input id="query"></label><button id="search" onclick="document.querySelector('#result').textContent='Loading';fetch('/async-data?delay=600&kind=click').then(r=>r.text()).then(()=>document.querySelector('#result').textContent='Result: '+document.querySelector('#query').value)">Search async</button><p id="result"></p><p id="status">Loading</p><script>fetch('/async-data?delay=${delay}&kind=navigate').then(r=>r.text()).then(()=>document.querySelector('#status').textContent='Navigation ready')</script>`);
     } else {
       res.writeHead(200, { 'content-type': 'text/html' });
       res.end('<title>Browser executor fixture</title><label>Search<input id="query"></label><button id="search" onclick="document.querySelector(\'#result\').textContent=document.querySelector(\'#query\').value">Search now</button><p id="result"></p><a href="/next">Next</a>');
@@ -76,6 +86,19 @@ test('real Browser Use executor batches observed actions, keeps tabs/login, reje
     owner = 'agent';
     await run(`await ui.goto(${JSON.stringify(origin)});`);
     assert.equal((await context.cookies(origin))[0].value, 'retained');
+    const fast = performance.now();
+    await run(`await ui.goto(${JSON.stringify(`${origin}/async?delay=0`)}, {waitFor: {text: 'Navigation ready', timeoutMs: 2000}});`);
+    assert(performance.now() - fast < 2000, 'Ready pages must not pay a fixed multi-second delay');
+    await run(`await ui.goto(${JSON.stringify(`${origin}/async?delay=600`)}, {waitFor: {text: 'Navigation ready', timeoutMs: 2000}}); var s=await ui.state(); var asyncInput=s.controls.find(n=>n.role==='textbox').id; var asyncButton=s.controls.find(n=>n.name==='Search async').id;`);
+    assert.equal(await context.pages()[0].locator('#status').textContent(), 'Navigation ready');
+    await run(`await ui.fill(asyncInput, 'current-query'); await ui.click(asyncButton, {waitFor: {text: 'Result: current-query', timeoutMs: 2000}});`);
+    assert.equal(await context.pages()[0].locator('#result').textContent(), 'Result: current-query');
+    const hitsBeforeTimeout = asyncHits.filter(kind => kind === 'click').length;
+    await assert.rejects(executor.tool.execute('wait-timeout', { code: `await ui.click(asyncButton, {waitFor: {text: 'never-produced', timeoutMs: 800}});` }), /Timeout/);
+    assert.equal(asyncHits.filter(kind => kind === 'click').length, hitsBeforeTimeout + 1, 'A readiness timeout must never replay its action');
+    const hitsBeforeInvalid = asyncHits.length;
+    await assert.rejects(executor.tool.execute('invalid-wait', { code: `await ui.click(asyncButton, {waitFor: {state: 'visible'}});` }), /Specify/);
+    assert.equal(asyncHits.length, hitsBeforeInvalid, 'Invalid wait conditions must fail before the action');
     const secret = await run('console.log("private-worker-token"); console.log(Object.keys(process.env));');
     assert.doesNotMatch(secret.content[0].text, /private-worker-token/);
   } finally {

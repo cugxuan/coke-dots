@@ -18,7 +18,8 @@ const secretEnvironmentName = /(?:API[_-]?KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)/
 const researchToolGuidance = `云电脑已预装的研究工具：
 先直接使用现有工具，不要先装依赖或编写自定义解析器。PDF：pdftotext -layout、pdfinfo、pdftoppm；Python pypdf、PyMuPDF（import pymupdf）。表格：Python csv/json、pandas、openpyxl。Word .docx：python-docx（import docx）。HTML/XML：BeautifulSoup（import bs4）、lxml、requests。命令行：rg、jq、file、unzip、zip、xxd。
 python3 和 pip 已使用包含这些库的可写虚拟环境；npm/pip 的可写缓存位于交付物之外。常规研究不要重装这些包，也不要先探测 sudo/pip/apt。确有缺失能力时才安装额外依赖，缓存不要放进任务交付目录。
-长文档只提取一次到任务文件，再用 rg 或页码/行号范围读取相关部分，不要把整份文档灌入对话。现有浏览器和租户权限仍须遵守；这些库不授予已登录网站的访问权限。`;
+长文档只提取一次到任务文件，再用 rg 或页码/行号范围读取相关部分，不要把整份文档灌入对话。现有浏览器和租户权限仍须遵守；这些库不授予已登录网站的访问权限。
+任务指定上交所且允许公开接口时，优先使用预装的 node /opt/coke-dots/sse-search.mjs --keyword "查询词" --limit 10（可选 --page 0、--mode precise|fuzzy|preciseMulti、--sort score|create_time），不要重写采集器或猜接口参数。该入口使用官网实际的 keyword、keywordPosition、siteName 等字段；searchword 不是有效关键词字段。结果只是带原始 URL 的搜索目录，须读取相关原文后再下结论。接口业务失败或连续分页/换关键词返回相同记录时停止扩采，核对浏览器当前真实请求；失败最多再走一条实质不同路径。任务限定仅浏览器时仍使用浏览器，不得以此入口代替。`;
 const taskResultContract = `Coke Dots 任务结果协议：
 工具调用前的 assistant text 也会显示给用户，不是内部推理。中文任务的所有可见进度、工具操作说明、message 和追问都必须使用简体中文，不要用英文开场或汇报进度。其他语言任务按用户的语言；明确要求的精确回复、代码标识符和必要原文引用保持原样。
 应用读取你的最终回复，只向用户展示 message 字段。结束时必须返回一个包含 status 和非空 message 的 JSON 对象。这是内部传输封装，不是工具调用或用户文件。用户要求精确回复、纯文本或不用工具时，将要求的回复原样放进 message，仍返回 JSON 封装。
